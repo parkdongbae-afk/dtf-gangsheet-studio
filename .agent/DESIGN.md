@@ -44,7 +44,7 @@
 | N4 | 설치형 실행 파일(exe) 배포 |
 
 ### 1.4 명시적 범위 외 (v2+)
-- AI 배경 제거(누끼) — rembg/u2net 후보
+- ~~AI 배경 제거(누끼)~~ — v2 구현 완료(§8)
 
 ---
 
@@ -172,8 +172,35 @@ interface ExportJob {
 
 ---
 
-## 8. v2 로드맵: 배경 제거 (설계만)
+## 8. v2 기능: 배경 제거 (구현 — .agent/REMOVEBG.MD 스펙 기반)
 
-- 후보: rembg(u2net/onnxruntime) 로컬 추론 — 오프라인(N1) 충족.
-- 통합 지점: 임포트 파이프라인의 선택적 전처리(`import → [배경제거] → 프리뷰 생성`).
-- 알파 마스크는 CanvasObject에 옵션으로 부착, 내보내기 시 레이어 마스크와 동일 경로로 합성.
+> 2026-09-02 v2 세션에서 구현 완료. 스펙 대비 조정 사항은 하단 표 참조.
+
+- **엔진**: `rembg` 2.0.81(onnxruntime CPU) 로컬 추론 — 오프라인(N1) 충족.
+  - 기본 모델 `birefnet-general`(SOTA 경계 정밀도), 폴백 `u2netp`/`isnet-general-use`.
+  - 모델 가중치는 `U2NET_HOME`(Electron이 `userData/models`로 지정)에 첫 사용 시
+    다운로드 후 캐싱 — 번들 미포함(인스톨러 1GB+ 증가 회피), 이후 오프라인 동작.
+- **파이프라인** (`export-sidecar/removebg.py`):
+  `remove()`(alpha_matting: fg 240 / bg 10 / erode 10 — 스펙값) →
+  `apply_dtf_defringe()`(cv2 타원 커널 알파 1px 침식, JPG 흰색 테두리 제거) →
+  32-bit RGBA PNG. 세션은 모델명별 1회 생성 캐싱, 처리 후 `gc.collect()`.
+- **IPC**: JSON-RPC 메서드 `remove_bg` — `{input_path, output_path, model?,
+  defringe_px?}` → 메타데이터 응답. **경로 기반 계약**(STDIO_GUIDE — stdio로
+  바이너리·Base64 전송 금지). 스펙의 Base64 스트림은 이 규칙에 위배되어 조정됨.
+- **통합 지점**: 임포트 전 자동 전처리가 아닌 **선택 항목 변환**(속성 패널
+  "배경 제거" 버튼) — 원본 유지 상태에서 사용자가 변환을 선택.
+  처리 결과는 알파가 포함된 RGBA PNG로 **에셋을 치환**한다(당초 "마스크를
+  CanvasObject에 부착" 안은 폐기 — 내보내기 파이프라인 §5의 알파→픽셀 마스크
+  경로를 그대로 재사용하며, undo 스냅샷(filePath·dataUrl 포함)으로 되돌리기 가능).
+  처리 파일은 `userData/removebg/<uuid>.png`에 영구 보관(.gsj 참조).
+- **UI**: PropertiesPanel "배경 제거" 섹션 — 처리 중 spinner 잠금,
+  첫 사용 모델 다운로드(약 1GB) 안내 문구 포함.
+
+### 스펙(REMOVEBG.MD) 대비 조정 요약
+
+| 스펙 | 구현 | 근거 |
+|---|---|---|
+| 이미지 Base64 IPC 수신 | 경로 기반 `{input_path, output_path}` | STDIO_GUIDE 철칙(stdio 바이너리 금지) |
+| 앱 시작 시 세션 생성 | 첫 `remove_bg` 요청 시 lazy 생성 | export 스폰 비용 불변(모델 ~1GB 로딩) |
+| PyInstaller 번들에 모델 포함 | 첫 사용 시 U2NET_HOME 다운로드 | 인스톨러 용량(1GB+) 회피, 오프라인 N1은 캐싱으로 충족 |
+| 알파 마스크 부착(DESIGN §8 초안) | RGBA PNG 에셋 치환 | 스펙이 RGBA PNG 반환, 기존 내보내기 경로 무수정 재사용 |

@@ -18,6 +18,19 @@ export interface ImportedImage {
   previewHeightPx: number
 }
 
+/** 배경 제거 결과 — 처리된 32-bit RGBA PNG가 새 원본이 된다 (치수는 입력과 동일) */
+export interface RemoveBgImage extends ImportedImage {
+  /** 배경 제거된 RGBA PNG 절대 경로 — 이후 내보내기·재편집의 원본 */
+  filePath: string
+}
+
+/** 사이드카 remove_bg 결과 — 경로·메타데이터만 (바이너리 반환 금지) */
+export interface RemoveBgSidecarResult {
+  output_path: string
+  width_px: number
+  height_px: number
+}
+
 import type { ExportFormat, ExportManifest } from '../workers/exportManifest'
 
 /** 사이드카 render 진행 알림 — stage "items"=항목 렌더, "write"=파일 저장 */
@@ -44,6 +57,8 @@ export interface DtfApi {
   openImages(): Promise<string[] | null>
   /** 원본 경로만 전달해 임포트 — 프리뷰 dataURL + 원본 px 반환 */
   importImage(filePath: string): Promise<ImportedImage>
+  /** 배경 제거(rembg 사이드카) — 처리된 RGBA PNG 경로 + 프리뷰 반환 (v2) */
+  removeBackground(filePath: string): Promise<RemoveBgImage>
   /** 드래그앤드롭 File → 절대 경로 — Electron 32+ 에서 File.path 제거의 공식 대체 */
   /** 드래그앤드롭 File → 절대 경로 — Electron 32+ 에서 File.path 제거의 공식 대체 */
   getPathForFile(file: File): string

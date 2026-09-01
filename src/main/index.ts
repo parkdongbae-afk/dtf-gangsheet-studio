@@ -4,6 +4,7 @@ import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
 import { registerImageImportIpc } from './ipc/imageImport'
 import { registerExportIpc, runExportTestHook } from './ipc/export'
+import { registerRemoveBgIpc } from './ipc/removeBg'
 
 function createWindow(): void {
   // Create the browser window.
@@ -62,6 +63,7 @@ app.whenReady().then(() => {
 
   registerImageImportIpc()
   registerExportIpc()
+  registerRemoveBgIpc()
 
   createWindow()
 

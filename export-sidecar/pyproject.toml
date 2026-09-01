@@ -6,6 +6,8 @@ requires-python = ">=3.12"
 dependencies = [
     "psd-tools>=1.9",
     "Pillow>=10.4",
+    "rembg[cpu]>=2.0.81",
+    "opencv-python-headless>=5.0.0.93",
 ]
 
 [dependency-groups]
@@ -22,7 +24,7 @@ build-backend = "hatchling.build"
 
 # 평면 모듈 구조(CLAUDE.md §2.1): 패키지 디렉터리 없이 최상위 모듈로 배포
 [tool.hatch.build.targets.wheel]
-only-include = ["renderer.py", "color.py", "psd_writer.py", "server.py"]
+only-include = ["renderer.py", "color.py", "psd_writer.py", "server.py", "removebg.py"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

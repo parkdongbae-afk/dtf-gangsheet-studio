@@ -19,6 +19,11 @@
   처리 중 항목별 ``progress`` 알림(id 없음)을 응답 스트림에 끼워 보낸다 —
   클라이언트는 ``method`` 키 유무로 알림·응답을 구분한다(응답은 항상
   ``id`` 키가 있고, 알림에는 없다).
+- ``remove_bg``: params = ``{input_path, output_path, model?, defringe_px?}``
+  → 배경 제거 + Defringe된 32-bit RGBA PNG를 ``output_path``에 기록
+  (removebg.py, v2). STDIO_GUIDE에 따라 **경로만 주고받는다** — 스펙
+  (REMOVEBG.MD §4)의 Base64 스트리밍은 프로젝트 stdio 바이너리 금지
+  철칙에 위배되어 경로 계약으로 조정. 첫 요청 시에만 모델 세션을 로딩한다.
 - ``shutdown``: 정상 응답 후 프로세스 종료
 
 베어 매니페스트 모드: ``method`` 없이 ``output_path``가 있는 객체 한 줄을
@@ -36,7 +41,9 @@ import sys
 from collections.abc import Callable, Mapping
 from typing import IO, Final
 
+import removebg
 import renderer
+from removebg import RemoveBgError
 from renderer import ManifestError
 
 __version__ = "0.1.0"  # pyproject [project].version과 동기 유지
@@ -124,6 +131,8 @@ def _dispatch(
             }
         elif method == "render":
             result = _render_manifest(message.get("params"), notifier)
+        elif method == "remove_bg":
+            result = _remove_bg(message.get("params"))
         elif method == "shutdown":
             result = {"status": "bye"}
         else:
@@ -132,6 +141,8 @@ def _dispatch(
                 return None
             return _error(request_id, METHOD_NOT_FOUND, f"unknown method: {method!r}")
     except ManifestError as exc:  # 입력 문제 — 매니페스트 스키마·파일·치수
+        return _notify_or_error(request_id, is_notification, INVALID_PARAMS, str(exc))
+    except RemoveBgError as exc:  # 입력 문제 — 경로·모델명·디코드 실패 (remove_bg)
         return _notify_or_error(request_id, is_notification, INVALID_PARAMS, str(exc))
     except Exception as exc:  # noqa: BLE001 — 프로세스 생존이 우선, 오류는 응답으로 전달
         detail = f"{type(exc).__name__}: {exc}"
@@ -166,6 +177,37 @@ def _render_manifest(
         "height_px": result.height_px,
         "layer_count": result.layer_count,
         "duration_ms": result.duration_ms,
+    }
+
+
+def _remove_bg(params: object) -> dict[str, object]:
+    """remove_bg 메서드 본문 — 경로 기반 배경 제거, 응답은 메타데이터만.
+
+    세션 로딩(모델 수백 MB)·추론은 수 초~수분 소요될 수 있어 요청은
+    동기로 처리한다(진행 알림 없음 — 렌더와 달리 단일 항목이다).
+    """
+    if not isinstance(params, Mapping):
+        raise RemoveBgError("'params' must be an object (remove_bg request)")
+    input_path = params.get("input_path")
+    output_path = params.get("output_path")
+    if not isinstance(input_path, str) or not input_path:
+        raise RemoveBgError("'input_path' must be a non-empty string")
+    if not isinstance(output_path, str) or not output_path:
+        raise RemoveBgError("'output_path' must be a non-empty string")
+    model = params.get("model", removebg.DEFAULT_MODEL)
+    if not isinstance(model, str) or not model:
+        raise RemoveBgError("'model' must be a non-empty string")
+    defringe_px = params.get("defringe_px", removebg.DEFAULT_DEFRINGE_PX)
+    if isinstance(defringe_px, bool) or not isinstance(defringe_px, int) or defringe_px < 0:
+        raise RemoveBgError("'defringe_px' must be an integer >= 0")
+
+    _log(f"remove_bg start: {input_path} -> {output_path} (model={model})")
+    result = removebg.process_file(input_path, output_path, model, defringe_px)
+    _log(f"remove_bg done: {result.width_px}x{result.height_px}")
+    return {
+        "output_path": str(output_path),
+        "width_px": result.width_px,
+        "height_px": result.height_px,
     }
 
 

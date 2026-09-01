@@ -5,10 +5,12 @@ import {
   ChevronDown,
   ChevronUp,
   Copy,
+  Eraser,
   Grid3x3,
   Layers,
   Link2,
   Link2Off,
+  Loader2,
   MousePointerClick,
   Move,
   RotateCw
@@ -27,6 +29,8 @@ export interface PropertiesPanelProps {
   onRotate90: () => void
   onOrder: (op: LayerOrderOp) => void
   onOpenGrid: () => void
+  onRemoveBg: () => void
+  removeBusy: boolean
 }
 
 function Section({
@@ -156,7 +160,9 @@ export function PropertiesPanel({
   onUpdate,
   onRotate90,
   onOrder,
-  onOpenGrid
+  onOpenGrid,
+  onRemoveBg,
+  removeBusy
 }: PropertiesPanelProps): React.JSX.Element {
   const [linked, setLinked] = useState(true)
 
@@ -294,6 +300,29 @@ export function PropertiesPanel({
                 현재 레이어 <span className="text-zinc-300">{selectedIndex + 1}</span> / {itemCount}
               </p>
             )}
+          </Section>
+
+          <Section
+            title="배경 제거"
+            icon={<Eraser size={ICON.size} strokeWidth={ICON.strokeWidth} />}
+          >
+            <button
+              type="button"
+              onClick={onRemoveBg}
+              disabled={removeBusy}
+              className="flex w-full items-center justify-center gap-2 rounded-md border border-indigo-500 bg-indigo-500/15 py-2 text-xs font-medium text-indigo-300 transition-colors hover:bg-indigo-500/25 active:scale-95 disabled:pointer-events-none disabled:opacity-40"
+            >
+              {removeBusy ? (
+                <Loader2 size={ICON.size} strokeWidth={ICON.strokeWidth} className="animate-spin" />
+              ) : (
+                <Eraser size={ICON.size} strokeWidth={ICON.strokeWidth} />
+              )}
+              {removeBusy ? '처리 중…' : '배경 제거'}
+            </button>
+            <p className="mt-2 text-[10px] leading-relaxed text-zinc-500">
+              AI 누끼로 배경을 투명하게 제거합니다. 첫 사용 시 모델 다운로드(약 1GB) 후 오프라인
+              동작하며, 처리 중 잠시 멈출 수 있습니다. Ctrl+Z로 되돌릴 수 있습니다.
+            </p>
           </Section>
 
           <Section

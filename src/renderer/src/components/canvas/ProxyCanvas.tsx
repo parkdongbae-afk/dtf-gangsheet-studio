@@ -125,6 +125,8 @@ export function ProxyCanvas({ widthPx, heightPx }: ProxyCanvasProps): React.JSX.
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [gridOpen, setGridOpen] = useState(false)
   const [exportOpen, setExportOpen] = useState(false)
+  /** 배경 제거 진행 중 — 사이드카 추론(첫 요청은 모델 다운로드 포함) 동안 버튼 잠금 */
+  const [removeBusy, setRemoveBusy] = useState(false)
 
   /** 현재 선택 항목 — 그리드 복제·화면 채우기 기준 (렌더 스코프에서 해석: 순수 updater 유지) */
   const selectedItem = selectedId ? (images.find((img) => img.id === selectedId) ?? null) : null
@@ -402,6 +404,30 @@ export function ProxyCanvas({ widthPx, heightPx }: ProxyCanvasProps): React.JSX.
     [images, selectedId, commitImages]
   )
 
+  /** 배경 제거(v2) — 처리된 RGBA PNG로 에셋 치환. 시작 시점의 id를 캡처해
+   *  처리 중 선택이 바뀌어도 올바른 항목을 갱신하고, undo 스냅샷으로 되돌린다. */
+  const handleRemoveBg = useCallback((): void => {
+    if (!selectedItem || removeBusy) return
+    const targetId = selectedItem.id
+    const sourcePath = selectedItem.filePath
+    setRemoveBusy(true)
+    window.api
+      .removeBackground(sourcePath)
+      .then((result) => {
+        commitImages((prev) =>
+          prev.map((img) =>
+            img.id === targetId
+              ? { ...img, filePath: result.filePath, dataUrl: result.dataUrl }
+              : img
+          )
+        )
+      })
+      .catch((err: unknown) => {
+        alert(`배경 제거 실패: ${err instanceof Error ? err.message : String(err)}`)
+      })
+      .finally(() => setRemoveBusy(false))
+  }, [selectedItem, removeBusy, commitImages])
+
   /** 경로들을 기준점 중심에 캐스케이드 배치해 씬에 추가 */
   const importPaths = useCallback(
     async (paths: string[], center: DocPoint): Promise<void> => {
@@ -629,6 +655,8 @@ export function ProxyCanvas({ widthPx, heightPx }: ProxyCanvasProps): React.JSX.
         onRotate90={handleRotate90}
         onOrder={handleOrder}
         onOpenGrid={() => setGridOpen(true)}
+        onRemoveBg={handleRemoveBg}
+        removeBusy={removeBusy}
       />
     </div>
   )

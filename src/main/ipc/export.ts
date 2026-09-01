@@ -18,10 +18,12 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join, extname } from 'node:path'
 import { createInterface } from 'node:readline'
 import type { ExportManifest } from '../../workers/exportManifest'
-import type { ExportProgress, ExportResult } from '../../types/ipc'
+import type { ExportProgress, ExportResult, RemoveBgSidecarResult } from '../../types/ipc'
 
 const PING_TIMEOUT_MS = 10_000
 const SHUTDOWN_TIMEOUT_MS = 3_000
+/** 배경 제거 상한 — 첫 요청은 모델 가중치 다운로드(birefnet 약 1GB)까지 포함 */
+const REMOVE_BG_TIMEOUT_MS = 600_000
 /** 스폰 실패 진단용 stderr 꼬리 상한 */
 const STDERR_TAIL_CHARS = 2_000
 
@@ -42,7 +44,8 @@ class SidecarManager {
   private nextId = 1
   private readonly pending = new Map<number, PendingRequest>()
   private stderrTail = ''
-  private rendering = false
+  /** 장기 작업 세마포어 — render·removeBg 상호 배타(사이드카는 단일 추론 프로세스) */
+  private busy = false
   private onProgress: ((progress: ExportProgress) => void) | null = null
 
   /** 렌더 진행 — render 호출부가 설정, 렌더 종료 시 해제 */
@@ -82,7 +85,10 @@ class SidecarManager {
     const { command, args } = this.resolveCommand()
     const child = spawn(command, args, {
       stdio: ['pipe', 'pipe', 'pipe'],
-      windowsHide: true
+      windowsHide: true,
+      // U2NET_HOME — rembg 모델 가중치 캐시 경로(REMOVEBG.MD §2). userData로
+      // 고정해 개발·패키지 모두 프로젝트 폴더 오염 없이 오프라인 재사용
+      env: { ...process.env, U2NET_HOME: join(app.getPath('userData'), 'models') }
     })
     this.child = child
     this.stdin = child.stdin
@@ -206,8 +212,8 @@ class SidecarManager {
     manifest: ExportManifest,
     onProgress: (progress: ExportProgress) => void
   ): Promise<ExportResult> {
-    if (this.rendering) throw new Error('이미 내보내기가 진행 중입니다')
-    this.rendering = true
+    if (this.busy) throw new Error('이미 내보내기가 진행 중입니다')
+    this.busy = true
     this.onProgress = onProgress
     try {
       await this.ensureStarted()
@@ -223,8 +229,32 @@ class SidecarManager {
       }
       return result as ExportResult
     } finally {
-      this.rendering = false
+      this.busy = false
       this.onProgress = null
+    }
+  }
+
+  /** 배경 제거(v2) — 첫 요청은 모델 로딩·다운로드(수 분)를 포함할 수 있다 */
+  async removeBg(inputPath: string, outputPath: string): Promise<RemoveBgSidecarResult> {
+    if (this.busy) throw new Error('사이드카 작업(내보내기·배경 제거)이 이미 진행 중입니다')
+    this.busy = true
+    try {
+      await this.ensureStarted()
+      const result = (await this.request(
+        'remove_bg',
+        { input_path: inputPath, output_path: outputPath },
+        REMOVE_BG_TIMEOUT_MS
+      )) as Partial<RemoveBgSidecarResult>
+      if (
+        typeof result.output_path !== 'string' ||
+        typeof result.width_px !== 'number' ||
+        typeof result.height_px !== 'number'
+      ) {
+        throw new Error(`사이드카 응답 스키마 위반: ${JSON.stringify(result).slice(0, 300)}`)
+      }
+      return result as RemoveBgSidecarResult
+    } finally {
+      this.busy = false
     }
   }
 
@@ -257,6 +287,14 @@ function saveDialogFilters(format: 'psd' | 'png'): Electron.FileFilter[] {
 }
 
 const sidecar = new SidecarManager()
+
+/** 배경 제거 요청 진입점 — removeBg.ts IPC가 사용 (사이드카 수명은 이 모듈이 소유) */
+export function removeBackgroundViaSidecar(
+  inputPath: string,
+  outputPath: string
+): Promise<RemoveBgSidecarResult> {
+  return sidecar.removeBg(inputPath, outputPath)
+}
 
 export function registerExportIpc(): void {
   ipcMain.handle('export:save-dialog', async (event, format: unknown): Promise<string | null> => {

@@ -33,8 +33,9 @@ interface CacheEntry {
 
 const previewCache = new Map<string, CacheEntry>()
 
-/** 원본을 디코딩해 프리뷰 결과 생성 — getSize()는 리사이즈 전 원본 기준 */
-function makePreview(absPath: string): ImportedImage {
+/** 원본을 디코딩해 프리뷰 결과 생성 — getSize()는 리사이즈 전 원본 기준.
+ *  removeBg.ts도 재사용한다(배경 제거된 PNG → 새 프리뷰). */
+export function makePreview(absPath: string): ImportedImage {
   const source = nativeImage.createFromPath(absPath)
   if (source.isEmpty()) {
     throw new Error(`이미지를 디코딩할 수 없습니다 (보장 포맷: PNG/JPG): ${basename(absPath)}`)

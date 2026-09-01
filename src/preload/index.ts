@@ -6,6 +6,7 @@ import type { DtfApi, ExportProgress } from '../types/ipc'
 const api: DtfApi = {
   openImages: (): Promise<string[] | null> => ipcRenderer.invoke('dialog:open-images'),
   importImage: (filePath: string) => ipcRenderer.invoke('image:import', filePath),
+  removeBackground: (filePath: string) => ipcRenderer.invoke('image:remove-bg', filePath),
   getPathForFile: (file: File): string => webUtils.getPathForFile(file),
   exportSaveDialog: (format) => ipcRenderer.invoke('export:save-dialog', format),
   exportDocument: (manifest) => ipcRenderer.invoke('export:render', manifest),
