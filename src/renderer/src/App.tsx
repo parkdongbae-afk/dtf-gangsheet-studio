@@ -6,12 +6,17 @@ import {
   getCanvasHeightPx,
   type HeightPresetM
 } from '../../core/math'
+import { ProxyCanvas } from './components/canvas/ProxyCanvas'
 
 function App(): React.JSX.Element {
   const [heightM, setHeightM] = useState<HeightPresetM>(1)
   const [created, setCreated] = useState(false)
 
   const heightPx = getCanvasHeightPx(heightM)
+
+  if (created) {
+    return <ProxyCanvas widthPx={CANVAS_WIDTH_PX} heightPx={heightPx} />
+  }
 
   return (
     <main className="new-doc">
@@ -40,11 +45,6 @@ function App(): React.JSX.Element {
         </div>
       </fieldset>
       <button onClick={() => setCreated(true)}>문서 만들기</button>
-      {created && (
-        <p className="result">
-          캔버스 {CANVAS_WIDTH_PX} × {heightPx} px
-        </p>
-      )}
     </main>
   )
 }
