@@ -1,10 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import {
+  calculateGridPositions,
   centeredTopLeft,
   commitTransform,
+  duplicateOffset,
   normalizeRotation,
   screenToDoc,
   viewCenterDoc,
+  type GridSource,
   type ViewTransform
 } from './placement'
 
@@ -98,5 +101,51 @@ describe('commitTransform', () => {
         scaleY: 2
       })
     ).toEqual({ x: -10, y: 0, widthPx: 50, heightPx: 100, rotation: -85 })
+  })
+})
+
+describe('duplicateOffset', () => {
+  it('화면 24px을 줌 배율로 보정 — 문서 px 오프셋', () => {
+    expect(duplicateOffset(1)).toBe(24)
+    expect(duplicateOffset(8)).toBe(3)
+    expect(duplicateOffset(0.1)).toBeCloseTo(240)
+  })
+})
+
+describe('calculateGridPositions', () => {
+  const item: GridSource = { x: 100, y: 200, widthPx: 600, heightPx: 400 }
+
+  it('1×1 — 원본 자리 단일 셀', () => {
+    expect(calculateGridPositions(item, 1, 1, 0)).toEqual([{ row: 0, col: 0, x: 100, y: 200 }])
+  })
+
+  it('3×4 gap 0 — 스텝 = 치수, row-major 순서, (0,0) = 원본 위치', () => {
+    const cells = calculateGridPositions(item, 3, 4, 0)
+    expect(cells).toHaveLength(12)
+    expect(cells[0]).toEqual({ row: 0, col: 0, x: 100, y: 200 })
+    expect(cells[3]).toEqual({ row: 0, col: 3, x: 100 + 3 * 600, y: 200 })
+    expect(cells[5]).toEqual({ row: 1, col: 1, x: 100 + 600, y: 200 + 400 })
+    expect(cells[11]).toEqual({ row: 2, col: 3, x: 100 + 3 * 600, y: 200 + 2 * 400 })
+  })
+
+  it('gap > 0 — 스텝 = 치수 + gap', () => {
+    const cells = calculateGridPositions(item, 2, 2, 138)
+    expect(cells[1]).toEqual({ row: 0, col: 1, x: 100 + 600 + 138, y: 200 })
+    expect(cells[2]).toEqual({ row: 1, col: 0, x: 100, y: 200 + 400 + 138 })
+  })
+
+  it('float 치수·gap 반올림 없이 그대로 — 반복 변환 오차 불누적', () => {
+    const f: GridSource = { x: 0.5, y: -0.25, widthPx: 123.4, heightPx: 56.7 }
+    const cells = calculateGridPositions(f, 2, 2, 8.9)
+    expect(cells[3].row).toBe(1)
+    expect(cells[3].col).toBe(1)
+    expect(cells[3].x).toBeCloseTo(0.5 + 132.3, 10)
+    expect(cells[3].y).toBeCloseTo(-0.25 + 65.6, 10)
+    expect(cells[3].x).not.toBe(133) // 반올림 금지 확인
+  })
+
+  it('음수 좌표(캔버스 밖) 순수 연산', () => {
+    const n: GridSource = { x: -1000, y: -2000, widthPx: 100, heightPx: 100 }
+    expect(calculateGridPositions(n, 2, 2, 50)[3]).toEqual({ row: 1, col: 1, x: -850, y: -1850 })
   })
 })

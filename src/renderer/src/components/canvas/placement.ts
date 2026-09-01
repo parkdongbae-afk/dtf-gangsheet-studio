@@ -39,11 +39,16 @@ export function centeredTopLeft(
   cascadeIndex: number,
   viewScale: number
 ): DocPoint {
-  const offset = (cascadeIndex * CASCADE_SCREEN_PX) / viewScale
+  const offset = cascadeIndex * duplicateOffset(viewScale)
   return {
     x: center.x - imgWidthPx / 2 + offset,
     y: center.y - imgHeightPx / 2 + offset
   }
+}
+
+/** Ctrl+D 복제 오프셋 (문서 px) — 화면 24px 규칙을 줌 배율로 보정 (S4 캐스케이드 재사용) */
+export function duplicateOffset(viewScale: number): number {
+  return CASCADE_SCREEN_PX / viewScale
 }
 
 /** 회전각 정규화 — 항상 (-180, 180] 범위 (270° → -90°, -180° → 180°) */
@@ -81,4 +86,42 @@ export function commitTransform(t: NodeTransformReading): PlacedTransform {
     heightPx: t.height * t.scaleY,
     rotation: normalizeRotation(t.rotation)
   }
+}
+
+/** 그리드 복제 계산에 필요한 원본 배치 정보 */
+export interface GridSource {
+  x: number
+  y: number
+  widthPx: number
+  heightPx: number
+}
+
+/** 그리드 셀 하나 — row-major. (0,0) 셀 = 원본 현재 자리 */
+export interface GridCell {
+  row: number
+  col: number
+  x: number
+  y: number
+}
+
+/**
+ * 그리드 복제 셀 좌표 (S5 세션 2) — 셀 (0,0)이 원본 위치, 스텝 = 치수 + gap (절대 px).
+ * 좌표는 float 그대로 (keepRatio 커밋 방식과 일치, 반올림 없음). 회전은 좌표계와 무관하게
+ * 사본이 원본 각을 물려받아 그리드 전체가 원본 로컬 축을 따라 회전한다.
+ */
+export function calculateGridPositions(
+  item: GridSource,
+  rows: number,
+  cols: number,
+  gap: number
+): GridCell[] {
+  const cells: GridCell[] = []
+  const stepX = item.widthPx + gap
+  const stepY = item.heightPx + gap
+  for (let row = 0; row < rows; row++) {
+    for (let col = 0; col < cols; col++) {
+      cells.push({ row, col, x: item.x + col * stepX, y: item.y + row * stepY })
+    }
+  }
+  return cells
 }

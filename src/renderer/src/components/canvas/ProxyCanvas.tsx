@@ -2,9 +2,12 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type Konva from 'konva'
 import type { Box } from 'konva/lib/shapes/Transformer'
 import { Image, Layer, Rect, Stage, Transformer } from 'react-konva'
+import { GridDialog } from './GridDialog'
 import {
+  calculateGridPositions,
   centeredTopLeft,
   commitTransform,
+  duplicateOffset,
   normalizeRotation,
   screenToDoc,
   viewCenterDoc,
@@ -15,7 +18,7 @@ import {
 import { useHtmlImage } from './useHtmlImage'
 
 /**
- * 프록시 캔버스 뷰포트 (S3) + 씬 이미지 배치·선택·이동·삭제 (S4)·리사이즈/회전 (S5).
+ * 프록시 캔버스 뷰포트 (S3) + 씬 이미지 배치·선택·이동·삭제 (S4)·리사이즈/회전/복제/그리드 (S5).
  *
  * - Stage 크기 = 브라우저 창(뷰포트) 고정 — 실제 6,890×N px 메모리의 Stage를 만들지 않는다.
  * - 문서는 가상 좌표계(350 DPI 절대 px)의 흰색 Rect + 이미지 노드로 표현 (CLAUDE.md §1:
@@ -68,6 +71,12 @@ const OVERLAY_BUTTON_STYLE: React.CSSProperties = {
 const clamp = (value: number, min: number, max: number): number =>
   Math.min(Math.max(value, min), max)
 
+/** 캔버스 전역 키보드 단축키를 텍스트 입력(그리드 대화상자 등)에서는 무시 */
+const isEditableTarget = (target: EventTarget | null): boolean =>
+  target instanceof HTMLInputElement ||
+  target instanceof HTMLTextAreaElement ||
+  (target instanceof HTMLElement && target.isContentEditable)
+
 /** 문서 전체가 화면에 들어오는 뷰 변환(fit-to-screen) 계산 */
 function fitView(docW: number, docH: number, viewW: number, viewH: number): ViewTransform {
   const scale = Math.min((viewW - FIT_PADDING * 2) / docW, (viewH - FIT_PADDING * 2) / docH)
@@ -95,6 +104,10 @@ export function ProxyCanvas({ widthPx, heightPx }: ProxyCanvasProps): React.JSX.
   )
   const [images, setImages] = useState<PlacedImage[]>([])
   const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [gridOpen, setGridOpen] = useState(false)
+
+  /** 현재 선택 항목 — 그리드 복제 기준 (렌더 스코프에서 해석: 순수 updater 유지) */
+  const selectedItem = selectedId ? (images.find((img) => img.id === selectedId) ?? null) : null
 
   /** 뷰포트(창) 리사이즈 추적 — 조작 이력 없으면 문서를 다시 맞춤 */
   useEffect(() => {
@@ -108,9 +121,10 @@ export function ProxyCanvas({ widthPx, heightPx }: ProxyCanvasProps): React.JSX.
     return () => window.removeEventListener('resize', onResize)
   }, [widthPx, heightPx])
 
-  /** 스페이스 홀드 = 팬 모드 (커서 grab + Stage 드래그 활성) */
+  /** 스페이스 홀드 = 팬 모드 (커서 grab + Stage 드래그 활성) — 텍스트 입력·모달 중 무시 */
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent): void => {
+      if (gridOpen || isEditableTarget(e.target)) return
       if (e.code === 'Space' && !e.repeat) {
         e.preventDefault()
         setSpaceDown(true)
@@ -128,12 +142,16 @@ export function ProxyCanvas({ widthPx, heightPx }: ProxyCanvasProps): React.JSX.
       window.removeEventListener('keyup', onKeyUp)
       window.removeEventListener('blur', onBlur)
     }
-  }, [])
+  }, [gridOpen])
 
-  /** Del/Backspace = 삭제, R = 90° 회전 (현재 UI에 텍스트 인풋 없음 — 도입 시 재검토) */
+  /**
+   * Del/Backspace = 삭제, R = 90° 회전, Ctrl/Cmd+D = 복제(화면 24px 오프셋 — 캐스케이드 규칙).
+   * 대화상자 모달 중·텍스트 입력 포커스 중에는 무시한다.
+   */
   useEffect(() => {
-    if (!selectedId) return
+    if (!selectedId || gridOpen) return
     const onKeyDown = (e: KeyboardEvent): void => {
+      if (isEditableTarget(e.target)) return
       if (e.key === 'Delete' || e.key === 'Backspace') {
         e.preventDefault()
         setImages((prev) => prev.filter((img) => img.id !== selectedId))
@@ -147,11 +165,27 @@ export function ProxyCanvas({ widthPx, heightPx }: ProxyCanvasProps): React.JSX.
             img.id === selectedId ? { ...img, rotation: normalizeRotation(img.rotation + 90) } : img
           )
         )
+        return
+      }
+      if ((e.ctrlKey || e.metaKey) && (e.key === 'd' || e.key === 'D')) {
+        e.preventDefault() // 브라우저 기본 동작(북마크) 차단 — Electron에서도 명시 차단
+        if (e.repeat) return
+        const item = images.find((img) => img.id === selectedId)
+        if (!item) return
+        const offset = duplicateOffset(view.scale)
+        const copy: PlacedImage = {
+          ...item,
+          id: crypto.randomUUID(),
+          x: item.x + offset,
+          y: item.y + offset
+        }
+        setImages((prev) => [...prev, copy])
+        setSelectedId(copy.id)
       }
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [selectedId])
+  }, [selectedId, images, view.scale, gridOpen])
 
   /** 단일 공유 트랜스포머에 선택 노드만 바인딩 — 노드 드래그는 트랜스포머가 자동 추적 */
   useEffect(() => {
@@ -219,6 +253,24 @@ export function ProxyCanvas({ widthPx, heightPx }: ProxyCanvasProps): React.JSX.
     interactedRef.current = false
     setView(fitView(widthPx, heightPx, window.innerWidth, window.innerHeight))
   }, [widthPx, heightPx])
+
+  /** 그리드 복제 확정 — 셀 (0,0)=원본 자리를 제외한 순수 JSON 사본 추가 (신규 id만 새로) */
+  const handleGridConfirm = useCallback(
+    (rows: number, cols: number, gapPx: number): void => {
+      if (!selectedItem) return
+      const copies = calculateGridPositions(selectedItem, rows, cols, gapPx)
+        .filter((cell) => cell.row > 0 || cell.col > 0)
+        .map((cell) => ({
+          ...selectedItem,
+          id: crypto.randomUUID(),
+          x: cell.x,
+          y: cell.y
+        }))
+      setImages((prev) => [...prev, ...copies])
+      setGridOpen(false)
+    },
+    [selectedItem]
+  )
 
   /** 경로들을 기준점 중심에 캐스케이드 배치해 씬에 추가 */
   const importPaths = useCallback(
@@ -373,10 +425,29 @@ export function ProxyCanvas({ widthPx, heightPx }: ProxyCanvasProps): React.JSX.
         <button onClick={handleImport} style={OVERLAY_BUTTON_STYLE}>
           가져오기
         </button>
+        <button
+          onClick={() => setGridOpen(true)}
+          disabled={!selectedItem}
+          style={{
+            ...OVERLAY_BUTTON_STYLE,
+            opacity: selectedItem ? 1 : 0.4,
+            cursor: selectedItem ? 'pointer' : 'not-allowed'
+          }}
+        >
+          그리드 복제
+        </button>
         <button onClick={handleFit} style={OVERLAY_BUTTON_STYLE}>
           맞춤
         </button>
       </div>
+
+      {gridOpen && selectedItem && (
+        <GridDialog
+          item={selectedItem}
+          onConfirm={handleGridConfirm}
+          onClose={() => setGridOpen(false)}
+        />
+      )}
 
       {/* 조작 힌트 */}
       <div
@@ -393,7 +464,7 @@ export function ProxyCanvas({ widthPx, heightPx }: ProxyCanvasProps): React.JSX.
         }}
       >
         휠: 줌 · Space + 드래그: 팬 · 클릭: 선택 · 드래그: 이동 · 핸들: 크기(Shift: 자유 비율)·회전
-        · R: 90° 회전 · Del: 삭제 · 이미지 드롭: 배치
+        · Ctrl+D: 복제 · R: 90° 회전 · Del: 삭제 · 이미지 드롭: 배치
       </div>
     </div>
   )
