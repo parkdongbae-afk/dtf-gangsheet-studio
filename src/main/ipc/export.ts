@@ -8,13 +8,14 @@
  *   (id 매칭) — server.py 계약과 대칭.
  * - 진행률은 렌더러에 `export:progress` 이벤트로 push. 취소는 자식 프로세스
  *   종료로 수행하며 다음 요청 때 사이드카가 자동 재시작된다.
- * - 파이썬 경로: DTF_SIDECAR_PYTHON 환경변수 → export-sidecar/.venv → PATH
- *   `python` (S7 PyInstaller 번들 시 경로 정책만 교체).
+ * - 스폰 대상(S7 패키징 정책): `DTF_SIDECAR_PYTHON`(확장자 .exe면 PyInstaller
+ *   번들 사이드카로 간주 — 인자 없음) → 패키지 모드 `resources/dtf-sidecar/
+ *   dtf-sidecar.exe` → 개발 모드 `export-sidecar/.venv` → PATH `python`.
  */
 import { BrowserWindow, app, dialog, ipcMain } from 'electron'
 import { spawn, type ChildProcess } from 'node:child_process'
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { join, extname } from 'node:path'
 import { createInterface } from 'node:readline'
 import type { ExportManifest } from '../../workers/exportManifest'
 import type { ExportProgress, ExportResult } from '../../types/ipc'
@@ -49,16 +50,28 @@ class SidecarManager {
     this.onProgress = handler
   }
 
-  private resolvePython(): string {
+  /** 스폰 대상 해석 — 패키지 모드는 번들 exe, 개발 모드는 인터프리터+server.py */
+  private resolveCommand(): { command: string; args: string[] } {
     const override = process.env.DTF_SIDECAR_PYTHON
-    if (override) return override
+    if (override) {
+      // .exe = PyInstaller onefile 번들(진입점 내장) — `-u server.py` 인자 불필요
+      return extname(override).toLowerCase() === '.exe'
+        ? { command: override, args: [] }
+        : { command: override, args: ['-u', this.resolveServerPath()] }
+    }
+    if (app.isPackaged) {
+      return {
+        command: join(process.resourcesPath, 'dtf-sidecar', 'dtf-sidecar.exe'),
+        args: []
+      }
+    }
     const appPath = app.getAppPath()
     const candidates =
       process.platform === 'win32'
         ? [join(appPath, 'export-sidecar', '.venv', 'Scripts', 'python.exe')]
         : [join(appPath, 'export-sidecar', '.venv', 'bin', 'python')]
     const found = candidates.find((p) => existsSync(p))
-    return found ?? 'python'
+    return { command: found ?? 'python', args: ['-u', this.resolveServerPath()] }
   }
 
   private resolveServerPath(): string {
@@ -66,8 +79,8 @@ class SidecarManager {
   }
 
   private spawnProcess(): void {
-    const python = this.resolvePython()
-    const child = spawn(python, ['-u', this.resolveServerPath()], {
+    const { command, args } = this.resolveCommand()
+    const child = spawn(command, args, {
       stdio: ['pipe', 'pipe', 'pipe'],
       windowsHide: true
     })

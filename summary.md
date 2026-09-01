@@ -1,70 +1,59 @@
 # summary.md — DTF GangSheet Studio 진행 상황
-갱신: 2026-09-02 / 완료: S6 세션 2 (PSD·PNG 출력 + 진행 다이얼로그 + Photoshop 검증) — **S6 단계 전체 완료**
+갱신: 2026-09-02 / 완료: S7 패키징 (PyInstaller onefile 사이드카 + electron-builder 리소스 포함)
 
 ## 현재 상태
-- **S6 완료 (세션 1·2)** — 세션 2: PNG(F9)·병합 옵션(F8)·NDJSON 진행 알림·Electron 사이드카
-  매니저 IPC·진행 다이얼로그 UI·**Photoshop COM 자동 개봉 검증 5/5**. 다음은 **S7 패키징**(PLAN.md 참조).
-- **S1 세션 2(실규격 포토샵 수동검증) 사실상 해소** — 이 머신에 Photoshop 설치 확인되어
-  SKILL §4 체크리스트를 COM 자동화(`Photoshop.Application`)로 실시: 1m(3레이어·병합)·
-  2m(레이어·병합)·PNG 전부 무경고 개봉, CMYK·350DPI·치수·레이어 수·캔버스 밖 레이어
-  음수 Bounds(-493px) 보존 확인. 잔여: 사람 눈 육성 확인은 산출물(`%TEMP%\opencode\s6_2\*.psd`)로 가능.
+- **S7 완료**: `npm run build:win` 한 명령으로 사이드카 번들→앱 빌드→NSIS 인스톨러까지
+  생성. 언팩 실행 패키지 모드 E2E(번들 exe 스폰→CMYK PSD 렌더·계약 검증) 통과.
+  클린 머신 설치 테스트만 사용자 협조로 남음(S8에서 실시).
+- **UXUI Phase 0~3 작업분은 여전히 미커밋** — S7 커밋과 분리됨(아래 목록 참조).
+  다음 세션 첫 작업으로 정리 커밋 필요.
 
-## 완료한 항목 (S6 세션 2)
-- 수정 파일: `export-sidecar/`(server·renderer·psd_writer·color + tests 4종)·
-  `src/main/ipc/export.ts`(신규)·`src/main/index.ts`·`src/preload/index.ts`·`src/types/ipc.ts`·
-  `src/workers/exportManifest.ts`(+test)·`ExportDialog.tsx`(신규)·`ProxyCanvas.tsx`·`main.css`
-- **사이드카 확장**: 매니페스트 `format`("psd"|"png")·`flatten`(bool) 필드 — PNG는 RGB+알파
-  그대로 저장(pHYs DPI 기록, F9), PSD 병합은 RGBA 합성→CMYK 1회→단일 "Merged 1" 레이어(F8).
-- **진행 알림**: 항목 렌더 직후 `("items", i+1, total)`·저장 직전 `("write", total)` 콜백 →
-  server가 NDJSON 알림 `{"jsonrpc":"2.0","method":"progress","params":{...}}`(id 없음)로 발신.
-  클라이언트는 `method` 키 유무로 알림·응답 구분(응답은 항상 id 있음). 베어 모드는 진행 알림 없이 1줄 응답 유지.
-- **Electron 메인**: `SidecarManager` — `python -u server.py` 스폰(UTF-8·readline·id 매칭·ping
-  핸드셰이크 10s·stderr 꼬리 진단·BrokenPipe 방어·cancel=kill 후 재스폰). 파이썬 경로:
-  `DTF_SIDECAR_PYTHON` → `export-sidecar/.venv` → PATH `python`. IPC: `export:save-dialog`·
-  `export:render`(진행률 `export:progress` 이벤트 push)·`export:cancel`. E2E 훅 `DTF_EXPORT_TEST=매니페스트 경로`
-  (DTF_SMOKE_TEST 패턴 계승 — 결과 JSON `.result.json` 기록 후 자동 종료).
-- **UI**: ProxyCanvas "내보내기" 버튼 → `ExportDialog`(포맷 라디오·병합 체크박스[PSD 전용]·
-  진행바·항목 카운터·취소·완료 결과[치수·레이어·소요]). 렌더 중 Esc·백드롭 닫기 차단.
-- **성능·메모리 (실측 개선)**:
-  - 1m 레이어 PSD **99.5초→2.1초**: psd-tools `save()`의 풀캔버스 float32 합성(1.42GiB)을
-    우리가 PIL paste 합성한 실합성 프리뷰 주입으로 우회(레이어 CMYK 재사용 — 재변환 0).
-  - 2m PSD **MemoryError(2.83GiB)→3.3초**: 캔버스 >100M px(≈2m)는 단색 RLE 프리뷰 주입
-    (Photoshop은 레이어로 재합성하므로 표시 동일).
-  - GCR 변환 청크화(1024행 스트립): 풀캔버스 float64 5.66GiB 할당 제거 — **2m 병합 28.6초 성공**.
-  - CMYK 반전 의미론 실증: PSD 규격은 CMYK 채널 반전 저장 — 프리뷰 주입 시 `ImageChops.invert`
-    (레이어 `PixelLayer.frompil`의 반전과 대칭). psd-tools 합성기는 저장형 의미론으로 동작.
-- **버그 수정(세션 중 발견)**: 베어 매니페스트 모드 렌더 실패 시 프로세스 크래시 →
-  `_dispatch`와 동일하게 -32602/-32603 오류 응답 1줄로 계약 통일(+회귀 테스트).
-- **검증 전량**: pytest **57**·Vitest **45**·ruff/pyright 0에러·typecheck 0에러·lint 본 세션
-  스코프 클린(잔여 6에러는 components/ 병렬 작업분)·`npm run build` 성공.
-  **E2E**: Electron 실구동 1m PSD(2.1s)·1m PNG(0.8s)·2m PSD(3.3s) + CLI 병합 1m(45s)·2m(28.6s) —
-  psd-tools 재검증 19/19. **UI E2E**(playwright-core `_electron`, 메인 다이얼로그 IPC만 스텁 — 앱 코드
-  무변경): 문서 생성→임포트→다이얼로그(포맷 전환·병합 옵션 토글)→실렌더→완료·362MB PSD 생성.
-  **Photoshop COM 5/5**(실측: Mode CMYK=3/RGB=2, Bounds는 원시 px).
+## 완료한 항목 (S7 세션)
+- **PyInstaller onefile 사이드카**: `export-sidecar/dtf-sidecar.spec` 신규(onefile,
+  hiddenimports psd-tools·PIL.ImageCms/ImageChops·numpy, upx=False 백신 오탐 방지,
+  console=True+windowsHide 스폰). pyinstaller 6.22.2 dev 의존성 추가(uv add). 산출 25.7MB.
+- **번들 바이너리 GCR 회귀**: 3색 밴드 소스(아이템 높이 3,031px — GCR 스트립 경계
+  1,024·2,048행 관통) 매니페스트를 번들 exe에 직접 파이프(베어 매니페스트 모드) →
+  PSD 계약 검증(치수·ColorMode 4·350DPI 16.16 원시 블록·스트립 경계 순색 픽셀) 통과.
+- **`src/main/ipc/export.ts`**: `resolvePython`→`resolveCommand` 재구성.
+  `app.isPackaged`면 `resources/dtf-sidecar/dtf-sidecar.exe`를 **인자 없이** 스폰.
+  `DTF_SIDECAR_PYTHON`은 확장자 .exe면 번들로 간주(E2E 오버라이드). 프로토콜·채널 불변.
+- **`electron-builder.yml` 재작성**: appId `com.dtfgangsheet.studio`·productName
+  `DTF GangSheet Studio`, extraResources(exe→`dtf-sidecar/dtf-sidecar.exe`), files
+  제외 정리(export-sidecar·components·에이전트 문서), win-only(nsis) — mac/linux 템플릿 제거.
+- **`package.json`**: `build:sidecar` 신규 + `build:unpack`/`build:win`에서 체인.
+- **검증 전량**: typecheck 0에러 · Vitest 55 · ruff/pyright 클린 · pytest 57 ·
+  `npm run build:win` 성공(인스톨러 137.3MB — `dist\dtf-gangsheet-studio-0.1.0-setup.exe`) ·
+  언팩 패키지 모드 E2E `DTF_EXPORT_TEST` → ok + PSD 계약 검증 통과 ·
+  dev 모드(`npx electron .` → .venv 스폰) 회귀 통과.
+  스크립트·산출물: `%TEMP%\opencode\s7\`(prep.py·verify.py·매니페스트·PSD).
 
-## 결정·변경 사항 (S6 세션 2)
-- **프리뷰 전략 3분기**(psd_writer.write_psd `preview` 파라미터): ① ≤100M px + 호출자 합성 →
-  실합성 주입 ② >100M px → 단색 RLE ③ 폴백 → psd-tools 기본(느림). Photoshop은 개봉 시
-  레이어로 재합성하므로 3분기 모두 표시 동일 — 비포토샵 뷰어(썸네일 등)만 단색(2m) 차이.
-- **병합 PSD에서 프리뷰=단일 레이어 픽셀 공유** — 추가 합성 비용 0.
-- **PSD 파일 크기 ~363MB@1m**(프리뷰 RLE가 거의 압축 안 됨) — S7 최적화 후보(RAW↔ZIP 압축 조사).
-- **매니페스트 직렬화 최소화**: format·flatten은 기본값(psd·false)일 때 생략(2KB 상한 회귀 유지).
-- **uv 비PATH 환경** 계속: `.venv\Scripts\{ruff,pytest,pyright}.exe` 직접 실행(pyright `--pythonpath`).
-- **병렬 작업 지속**: `components/`·`src/renderer/src/lib/`·`package.json`(clsx 등)·`.agent/UXUI.md`는
-  본 세션 범위 밖 — 미커밋·미수정 유지.
+## 결정·변경 사항 (S7 세션)
+- **extraResources `to`는 파일 전체 경로**: 디렉터리명만 쓰면 확장자 없는 파일로
+  복사됨(첫 빌드 ENOENT 원인) — 경로 계약을 yml·export.ts 양측 주석에 명시.
+- **클린 머신 요건**: 설치 머신엔 Python/uv 불필요(onefile 자급). 빌드 머신엔 uv 필요 —
+  이 머신 `~\.local\bin`에 uv 0.12.8 설치(사용자 PATH 등록 — 새 셸부터 적용).
+- **PowerShell 5.1 함정 2종 기록**: `Set-Content -Encoding UTF8`은 BOM 부여 →
+  JSON.parse 실패(무BOM 필요 시 `[IO.File]::WriteAllText` 사용) · 한글 포함 git
+  출력은 PS 파이프라인 캡처 대신 cmd 리다이렉트로 바이트 보존.
+- **package.json 분리 스테이징**: 병렬 UXUI분(UI 의존성 5종)은 미커밋 유지, S7
+  scripts 블록만 선택 스테이징(`%TEMP%\opencode\s7\stage-pkg.ps1` 방식).
+
+## 미커밋 UXUI Phase 0~3 작업분 (S7 커밋에서 제외 — 다음 세션 정리)
+- `src/renderer/` 일괄(App.tsx·main.css·ProxyCanvas·ExportDialog·GridDialog·
+  placement.ts·PropertiesPanel.tsx 신규·lib/) · `src/core/math/` · `components/`(목업) ·
+  `electron.vite.config.ts`(tailwind) · `.agent/UXUI.md` · `package-lock.json` ·
+  package.json 의존성 hunk(UI 5종) · `tsconfig.web.tsbuildinfo`
 
 ## 다음 세션
-- 단계: **S7 — 패키징 (PyInstaller onefile 사이드카 → electron-builder 리소스 포함 → 클린 머신 설치 테스트)** (PLAN.md 참조)
-- 핀포인트: `electron-builder.yml`, 사이드카 PyInstaller spec, `src/main/ipc/export.ts`(파이썬 경로 해석을 패키지 리소스로 확장 — `app.isPackaged` 분기), `npm run build:win`
-- 사전 검토: preload/UI 변경 불필요(채널 동일). 사이드카 PyInstaller 빌드 시 psd-tools·Pillow·numpy
-  hidden imports·청크 GCR 회귀(pytest를 번들 바이너리로 재실행) 확인. 클린 윈도우 머신 설치 테스트는
-  사용자 협조 필요(또는 새 윈도우 유저 계정 프로파일로 대체).
+- 단계: **S8 — 최종 검증·릴리즈** (PLAN.md 참조) + 선행: UXUI 정리 커밋
+- 핀포인트: SKILL §4 전체 체크리스트, 2m 문서 스트레스, `dev → main` PR, 버전 태그,
+  **클린 머신 설치 테스트(사용자 협조 — 인스톨러 `dist\dtf-gangsheet-studio-0.1.0-setup.exe`)**
 - 시작 프롬프트(복사):
 
 ```text
-summary.md와 .agent/PLAN.md의 S7 항목만 읽고 시작하세요.
-S7(패키징 — PyInstaller onefile 사이드카 + electron-builder 리소스 포함) 구현 계획을 3단계로 요약만 해주세요. 승인 후 코드를 작성하세요.
-사이드카 통신은 기존 NDJSON JSON-RPC 프로토콜을 그대로 사용하고, src/main/ipc/export.ts의 파이썬 경로 해석만 패키지 경로(app.isPackaged)로 확장하세요.
-수정 대상은 electron-builder.yml·PyInstaller spec(신규)·src/main/ipc/export.ts입니다.
+summary.md와 .agent/PLAN.md의 S8 항목만 읽고 시작하세요.
+먼저 미커밋 UXUI Phase 0~3 작업분을 별도 커밋으로 정리하고(push 포함),
+S8(최종 검증·릴리즈) 계획을 3단계로 요약만 해주세요. 승인 후 실행하세요.
+클린 머신 설치 테스트는 인스톨러(dist\dtf-gangsheet-studio-0.1.0-setup.exe)로 진행합니다.
 ```
-
