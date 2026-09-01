@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type Konva from 'konva'
-import { Image, Layer, Rect, Stage } from 'react-konva'
+import { Image, Layer, Rect, Stage, Transformer } from 'react-konva'
 import {
   centeredTopLeft,
   screenToDoc,
@@ -11,7 +11,7 @@ import {
 import { useHtmlImage } from './useHtmlImage'
 
 /**
- * 프록시 캔버스 뷰포트 (S3) + 씬 이미지 배치 (S4).
+ * 프록시 캔버스 뷰포트 (S3) + 씬 이미지 배치·선택·이동·삭제 (S4).
  *
  * - Stage 크기 = 브라우저 창(뷰포트) 고정 — 실제 6,890×N px 메모리의 Stage를 만들지 않는다.
  * - 문서는 가상 좌표계(350 DPI 절대 px)의 흰색 Rect + 이미지 노드로 표현 (CLAUDE.md §1:
@@ -40,6 +40,9 @@ const MAX_SCALE = 8
 const ZOOM_SENSITIVITY = 0.0015
 /** fit-to-screen 시 화면 가장자리 여백 (px) */
 const FIT_PADDING = 24
+/** 문서 배경 Rect 식별명 — 빈 곳 클릭(선택 해제) 판정에 사용 */
+const DOC_BACKGROUND = 'doc-background'
+const SELECTION_STROKE = '#0ea5e9'
 
 const OVERLAY_BUTTON_STYLE: React.CSSProperties = {
   padding: '2px 10px',
@@ -69,6 +72,8 @@ export interface ProxyCanvasProps {
 
 export function ProxyCanvas({ widthPx, heightPx }: ProxyCanvasProps): React.JSX.Element {
   const stageRef = useRef<Konva.Stage>(null)
+  /** 씬 전체에서 유일한 트랜스포머 — 선택 테두리 렌더 (이미지별 트랜스포머 금지) */
+  const transformerRef = useRef<Konva.Transformer>(null)
   /** 사용자가 줌/팬을 한 번이라도 조작했는가 — 조작 전엔 리사이즈 시 자동 refit */
   const interactedRef = useRef(false)
 
@@ -78,6 +83,7 @@ export function ProxyCanvas({ widthPx, heightPx }: ProxyCanvasProps): React.JSX.
     fitView(widthPx, heightPx, window.innerWidth, window.innerHeight)
   )
   const [images, setImages] = useState<PlacedImage[]>([])
+  const [selectedId, setSelectedId] = useState<string | null>(null)
 
   /** 뷰포트(창) 리사이즈 추적 — 조작 이력 없으면 문서를 다시 맞춤 */
   useEffect(() => {
@@ -113,6 +119,29 @@ export function ProxyCanvas({ widthPx, heightPx }: ProxyCanvasProps): React.JSX.
     }
   }, [])
 
+  /** Del/Backspace = 선택 이미지 삭제 (현재 UI에 텍스트 인풋 없음 — 도입 시 재검토) */
+  useEffect(() => {
+    if (!selectedId) return
+    const onKeyDown = (e: KeyboardEvent): void => {
+      if (e.key !== 'Delete' && e.key !== 'Backspace') return
+      e.preventDefault()
+      setImages((prev) => prev.filter((img) => img.id !== selectedId))
+      setSelectedId(null)
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [selectedId])
+
+  /** 단일 공유 트랜스포머에 선택 노드만 바인딩 — 노드 드래그는 트랜스포머가 자동 추적 */
+  useEffect(() => {
+    const transformer = transformerRef.current
+    const stage = stageRef.current
+    if (!transformer || !stage) return
+    const node = selectedId ? stage.findOne(`#${selectedId}`) : null
+    transformer.nodes(node ? [node] : [])
+    transformer.getLayer()?.batchDraw()
+  }, [selectedId, images])
+
   /** 휠 줌 — 포인터 아래 문서 좌표를 고정한 채 stage.scale/position만 갱신 */
   const handleWheel = (e: Konva.KonvaEventObject<WheelEvent>): void => {
     e.evt.preventDefault()
@@ -137,6 +166,26 @@ export function ProxyCanvas({ widthPx, heightPx }: ProxyCanvasProps): React.JSX.
     interactedRef.current = true
     setView((prev) => ({ ...prev, x: e.currentTarget.x(), y: e.currentTarget.y() }))
   }
+
+  /** Stage 빈 곳(스테이지 자신·문서 배경) 클릭 = 선택 해제 */
+  const handleStageMouseDown = (e: Konva.KonvaEventObject<MouseEvent>): void => {
+    if (e.target === e.target.getStage() || e.target.name() === DOC_BACKGROUND) {
+      setSelectedId(null)
+    }
+  }
+
+  /** 이미지 클릭 선택 — Space 팬 모드 중에는 무시 (내비게이션 우선) */
+  const handleSelect = useCallback(
+    (id: string): void => {
+      if (!spaceDown) setSelectedId(id)
+    },
+    [spaceDown]
+  )
+
+  /** 이미지 드래그 이동 확정 — 문서 좌표(절대 px)를 상태로 커밋 */
+  const handleMove = useCallback((id: string, x: number, y: number): void => {
+    setImages((prev) => prev.map((img) => (img.id === id ? { ...img, x, y } : img)))
+  }, [])
 
   /** "맞춤" 버튼 — 문서 전체가 화면에 들어오도록 초기화 */
   const handleFit = useCallback((): void => {
@@ -227,10 +276,12 @@ export function ProxyCanvas({ widthPx, heightPx }: ProxyCanvasProps): React.JSX.
         draggable={spaceDown}
         onWheel={handleWheel}
         onDragEnd={handleDragEnd}
+        onMouseDown={handleStageMouseDown}
       >
         <Layer>
           {/* 가상 문서 — 실규격 350 DPI 좌표계의 흰색 Rect (테두리는 화면 2px 유지) */}
           <Rect
+            name={DOC_BACKGROUND}
             x={0}
             y={0}
             width={widthPx}
@@ -243,8 +294,22 @@ export function ProxyCanvas({ widthPx, heightPx }: ProxyCanvasProps): React.JSX.
         </Layer>
         <Layer>
           {images.map((placed) => (
-            <SceneImage key={placed.id} placed={placed} />
+            <SceneImage
+              key={placed.id}
+              placed={placed}
+              draggable={!spaceDown}
+              onSelect={handleSelect}
+              onMove={handleMove}
+            />
           ))}
+          {/* 선택 테두리 전용 트랜스포머 — 핸들·회전은 S5에서 활성화 */}
+          <Transformer
+            ref={transformerRef}
+            resizeEnabled={false}
+            rotateEnabled={false}
+            borderStroke={SELECTION_STROKE}
+            borderStrokeWidth={2}
+          />
         </Layer>
       </Stage>
 
@@ -292,23 +357,40 @@ export function ProxyCanvas({ widthPx, heightPx }: ProxyCanvasProps): React.JSX.
           userSelect: 'none'
         }}
       >
-        휠: 줌 · Space + 드래그: 팬 · 이미지 드롭: 배치
+        휠: 줌 · Space + 드래그: 팬 · 클릭: 선택 · 드래그: 이동 · Del: 삭제 · 이미지 드롭: 배치
       </div>
     </div>
   )
 }
 
-/** 씬 이미지 노드 — 원본 px 크기 그대로 렌더 */
-function SceneImage({ placed }: { placed: PlacedImage }): React.JSX.Element | null {
+interface SceneImageProps {
+  placed: PlacedImage
+  /** Space 팬 모드 중 false — stage 드래그가 우선한다 */
+  draggable: boolean
+  onSelect: (id: string) => void
+  onMove: (id: string, x: number, y: number) => void
+}
+
+/** 씬 이미지 노드 — 원본 px 크기 그대로 렌더. mousedown으로 즉선택 후 드래그 이동 */
+function SceneImage({
+  placed,
+  draggable,
+  onSelect,
+  onMove
+}: SceneImageProps): React.JSX.Element | null {
   const el = useHtmlImage(placed.dataUrl)
   if (!el) return null
   return (
     <Image
+      id={placed.id}
       x={placed.x}
       y={placed.y}
       width={placed.widthPx}
       height={placed.heightPx}
       image={el}
+      draggable={draggable}
+      onMouseDown={() => onSelect(placed.id)}
+      onDragEnd={(e) => onMove(placed.id, e.currentTarget.x(), e.currentTarget.y())}
       perfectDrawEnabled={false}
     />
   )

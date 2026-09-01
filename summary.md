@@ -1,54 +1,56 @@
 # summary.md — DTF GangSheet Studio 진행 상황
-갱신: 2026-09-02 / 완료: S4 세션 1 (이미지 임포트 + 씬 배치) — 세션 1
+갱신: 2026-09-02 / 완료: S4 전체 (세션 2 — 선택/이동/Del 삭제)
 
 ## 현재 상태
-- **S4 세션 1 완료**: 파일 대화상자 + DnD 임포트, 메인 프로세스 ≤2,048px 프리뷰(nativeImage·mtime 캐시),
-  씬 배치(원본 px 그대로 렌더) + Playwright 실기동 검증 통과(12/12 × 2회 + 리사이즈 분기).
+- **S4 완료**: 세션 1(임포트+배치)에 이어 세션 2(선택/해제·드래그 이동·Del 삭제) 완료 —
+  Playwright 실기동 검증 12/12 × 2회 통과. 다음은 S5(편집 완성) 세션 1.
 - **S1 세션 2(실규격 포토샵 수동검증) 여전히 보류** — 포토샵 설치 머신에서 6,890×13,780 PSD 개봉 체크리스트(SKILL.md §4) 확인 필요.
 
-## 완료한 항목 (S4 세션 1)
-- `src/types/ipc.ts` 신규 — 공유 IPC 계약(`ImportedImage`, `DtfApi`): 렌더러↔메인 경로만 전달, 바이너리 IPC 금지 원칙 명문화
-- `src/main/ipc/imageImport.ts` 신규 + `src/main/index.ts` 등록 1줄:
-  - `dialog:open-images` — 다중 선택 파일 대화상자(PNG/JPG/JPEG/WEBP/TIFF/BMP 필터), 취소 시 null
-  - `image:import` — `nativeImage.createFromPath` → 원본 크기(`getSize()` 리사이즈 전) + 최대변 2,048px
-    프리뷰 PNG dataURL 반환, 경로+mtime 키 Map 캐시(상한 64, 재임포트 0비용)
-- `src/preload/index.ts` + `index.d.ts` — `api.openImages`·`api.importImage`·`api.getPathForFile` 노출
-- `src/renderer/src/components/canvas/`:
-  - `placement.ts` 신규 — 순수 함수 `screenToDoc`·`viewCenterDoc`·`centeredTopLeft`(캐스케이드 화면 24px)
-    + `ViewTransform` 이동 정의, `placement.test.ts` 6개 (Vitest 선검증)
-  - `useHtmlImage.ts` 신규 — dataUrl→HTMLImageElement 모듈 캐시 훅(상한 32, 캐시 히트 즉시 반환)
-  - `ProxyCanvas.tsx` — `PlacedImage[]` 상태 + 배치 Layer(Image 노드 원본 px 그대로) + 오버레이 "가져오기"
-    버튼 + DnD(onDrop→문서 좌표 변환 배치). 줌/팬 로직 무변경(stage scale/position만)
-- `package.json`: devDependencies에 `playwright-core` 추가(브라우저 다운로드 없는 Electron E2E용, 이후 세션 재사용)
+## 완료한 항목 (S4 세션 2)
+- 수정 파일: `src/renderer/src/components/canvas/ProxyCanvas.tsx` 1개 (신규 파일 없음)
+- **선택**: `selectedId` 상태(컴포넌트 내부 — S5 세션 3까지 리프트 불필요) + 씬 Layer에 **단일 공유
+  Konva.Transformer** 1개(`resizeEnabled=false`·`rotateEnabled=false` — 테두리 전용 #0ea5e9 2px,
+  핸들·회전은 S5에서 활성화). 이미지 `onMouseDown` → 선택, Stage 빈 곳/문서 배경 Rect(`name`
+  식별) 클릭 → 해제. 바인딩은 `stage.findOne('#id')`로 선택 노드만 `transformer.nodes([...])`
+- **이동**: 이미지 `draggable={!spaceDown}` + `onDragEnd`에서 문서 좌표(350 DPI 절대 px)를
+  `PlacedImage.x/y`로 커밋. Space 팬 모드에서는 stage.draggable이 우선(선택·이동 모두 차단,
+  상호배제 구조). 트랜스포머는 바인딩 노드를 자동 추적(Konva 내장)
+- **삭제**: 기존 키보드 effect 옆에 Del/Backspace → 선택 이미지 제거 + 선택 해제
+- 조작 힌트 텍스트 갱신(클릭: 선택 · 드래그: 이동 · Del: 삭제)
 - 검증: typecheck(node+web) ✓ · lint 0경고 ✓ · vitest 16 passed ✓ · 빌드 ✓ ·
-  Playwright E2E(프로덕션 빌드 + 대화상자 메인 스텁): 렌더·원본 크기·뷰 중심 배치 좌표(오차<0.01)·
-  PNG dataURL·캐시 동일성·줌/팬/맞춤 무회귀·콘솔 에러 없음 = 12/12 × 2회 ·
-  리사이즈 분기: 4,000×2,000 PNG(zlib 직접 생성) → 프리뷰 2,048×1,024 비율 유지 ✓
+  Playwright E2E(프로덕션 빌드 + 대화상자 메인 스텁, `%TEMP%\opencode\s4s2.e2e.mjs`):
+  임포트 렌더·원본 px 크기·뷰 중심 배치 좌표·클릭 선택(최상위 바인딩)·드래그 이동 좌표 커밋
+  (오차<0.5px)·다른 이미지 무변경·트랜스포머 추적·빈 곳 해제·Del/Backspace 삭제·Space 팬
+  우선(이미지 무이동)·휠 줌/맞춤 무회귀·캐시 동일성·콘솔 에러 없음 = **12/12 × 2회**
 
-## 결정·변경 사항 (S4 세션 1)
-- **Electron 44에서 `File.path`는 제거됨** → 공식 대체 `webUtils.getPathForFile(file)`를 프리로드에 노출해
-  "경로만 전달" 원칙 유지 (절약 팁 #1의 구현 조정)
-- `PlacedImage`가 `filePath` 보유 — S6 내보내기(풀해상도 렌더)에서 원본 소스로 사용
-- 씬 상태는 현재 `ProxyCanvas` 내부 — S5 undo 커맨드 스택 도입 시 App/씬모듈로 리프트 예정
-- nativeImage 디코딩은 PNG/JPG 보장 — WEBP/TIFF/BMP는 플랫폼별 실패 가능 → 사용자 안내 에러.
-  sharp 도입은 실수요 발생 시 별도 결정
-- 다이얼로그 E2E 자동화: 메인 프로세스 `dialog.showOpenDialog` 스텝 교체(`electronApp.evaluate`)로 회피 —
-  `_electron.launch({ executablePath: require('electron'), args: [REPO] })` 패턴 (프로덕션 빌드 필요)
-- Konva 검증은 `window.Konva.stages[0]` API로 확인(프로덕션 빌드에서도 전역 노출 확인됨, S3 팁 유지)
+## 결정·변경 사항 (S4 세션 2)
+- **Konva.Transformer는 절대(화면) 좌표계로 렌더링** — 소스 확인 결과 `getAbsoluteTransform()`
+  오버라이드로 조상(스테이지) 변환을 무시 → `borderStrokeWidth`는 줌 배율과 무관하게 항상
+  화면 px(문서 Rect의 `2 / view.scale` 패턴 불필요). S5에서 앵커 크기도 동일하게 화면 px
+- **Transformer 테두리 스트로크는 노드 경계에 중앙 정렬** → 트랜스포머 clientRect이 노드보다
+  strokeWidth/2(=1px) 확장됨 — E2E 좌표 비교 허용오차 1.5px
+- 트랜스포머 테두리 드래그 = 노드 이동 프록시(Konva `_proxyDrag` 내장) — 별도 구현 불필요
+- 선택은 mousedown 기반(클릭→드래그 시작 즉시 선택). Space 홀드 중에는 선택 핸들러 가드로
+  무시 — 팬 조작이 선택을 오염시키지 않음
+- Del/Backspace 삭제는 현재 UI에 텍스트 인풋이 없어 전역 keydown으로 처리 — 인풋 도입 시
+  포커스 가드 재검토 필요(코드 주석에 명시)
+- S5 세션 1은 기존 트랜스포머의 `resizeEnabled`/`rotateEnabled` 활성화 + `onTransformEnd`
+  커밋으로 직접 이어짐. `PlacedImage`에 `rotation`(및 리사이즈 후 widthPx/heightPx 갱신) 추가 필요
 
 ## 다음 세션
-- 단계: **S4 세션 2 — 선택/해제, 드래그 이동, Del 삭제** (PLAN.md 참조)
-- 사전 결정 사항: **캔버스 당 단 1개의 공유 Konva.Transformer** — 클릭된 노드 id만
-  `transformer.nodes([selectedNode])`로 바인딩(이미지별 핸들러/트랜스포머 금지, 절약 팁 #3).
-  Stage 빈 곳 클릭 = 해제, 이미지 드래그 = 이동(stage draggable과 충돌 시 stage.draggable 우선 로직 설계),
-  Del 키 = 선택 항목 삭제. `PlacedImage` 상태 리프트는 S5까지 유지 불필요 — ProxyCanvas 내부에
-  `selectedId` 상태 추가로 충분
-- 핀포인트: `src/renderer/src/components/canvas/ProxyCanvas.tsx` (및 신규 interactions 컴포넌트 가능)
+- 단계: **S5 세션 1 — 리사이즈 핸들(비율 유지 기본), 회전(90°/1°)** (PLAN.md 참조)
+- 사전 결정 사항: 단일 공유 Transformer에 `enabledAnchors`(모서리 4개 권장 — 비율 유지
+  `keepRatio` 기본)·`rotateEnabled` 활성화. `onTransformEnd`에서 절대 px로 x/y/widthPx/heightPx
+  커밋(스케일 오프셋 주의: Konva transform은 scale로 들어오므로 width×scaleX 확정 후
+  scaleX 리셋 패턴). 회전은 `PlacedImage.rotation` 신규 필드. 90° 회전은 별도 버튼/단축키로
+  rotation += 90 정규화(-180~180). Shift = 자유 비율(기본 비율 유지과 반대 설계 — DESIGN 확인)
+- 핀포인트: `src/renderer/src/components/canvas/` (ProxyCanvas + interactions 컴포넌트 가능),
+  `src/core/`(수학 필요 시)
 - 시작 프롬프트(복사):
 
 ```text
-summary.md와 .agent/PLAN.md의 S4 항목만 읽고 시작하세요.
-S4 세션 2(선택/이동/Del 삭제) 구현 계획을 3단계로 요약만 해주세요. 승인 후 코드를 작성하세요.
-단일 공유 Konva.Transformer 패턴을 사용하세요 (이미지별 트랜스포머 금지).
+summary.md와 .agent/PLAN.md의 S5 항목만 읽고 시작하세요.
+S5 세션 1(리사이즈 핸들·회전) 구현 계획을 3단계로 요약만 해주세요. 승인 후 코드를 작성하세요.
+기존 단일 공유 Konva.Transformer를 활성화하는 방식으로 구현하세요 (신규 트랜스포머 금지).
 수정 대상은 src/renderer/src/components/canvas/ 내부입니다.
 ```
