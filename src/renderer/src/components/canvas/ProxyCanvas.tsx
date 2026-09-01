@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type Konva from 'konva'
 import type { Box } from 'konva/lib/shapes/Transformer'
 import { Image, Layer, Rect, Stage, Transformer } from 'react-konva'
+import { ExportDialog } from './ExportDialog'
 import { GridDialog } from './GridDialog'
 import {
   calculateGridPositions,
@@ -118,6 +119,7 @@ export function ProxyCanvas({ widthPx, heightPx }: ProxyCanvasProps): React.JSX.
   })
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [gridOpen, setGridOpen] = useState(false)
+  const [exportOpen, setExportOpen] = useState(false)
 
   /** 현재 선택 항목 — 그리드 복제·화면 채우기 기준 (렌더 스코프에서 해석: 순수 updater 유지) */
   const selectedItem = selectedId ? (images.find((img) => img.id === selectedId) ?? null) : null
@@ -181,7 +183,7 @@ export function ProxyCanvas({ widthPx, heightPx }: ProxyCanvasProps): React.JSX.
   /** 스페이스 홀드 = 팬 모드 (커서 grab + Stage 드래그 활성) — 텍스트 입력·모달 중 무시 */
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent): void => {
-      if (gridOpen || isEditableTarget(e.target)) return
+      if (gridOpen || exportOpen || isEditableTarget(e.target)) return
       if (e.code === 'Space' && !e.repeat) {
         e.preventDefault()
         setSpaceDown(true)
@@ -199,7 +201,7 @@ export function ProxyCanvas({ widthPx, heightPx }: ProxyCanvasProps): React.JSX.
       window.removeEventListener('keyup', onKeyUp)
       window.removeEventListener('blur', onBlur)
     }
-  }, [gridOpen])
+  }, [gridOpen, exportOpen])
 
   /**
    * 씬 편집 단축키 (통합) — Ctrl+Z=실행취소, Ctrl+Shift+Z/Ctrl+Y=다시실행(선택 불필요),
@@ -207,7 +209,7 @@ export function ProxyCanvas({ widthPx, heightPx }: ProxyCanvasProps): React.JSX.
    * 대화상자 모달 중·텍스트 입력 포커스 중에는 전면 무시한다.
    */
   useEffect(() => {
-    if (gridOpen) return
+    if (gridOpen || exportOpen) return
     const onKeyDown = (e: KeyboardEvent): void => {
       if (isEditableTarget(e.target)) return
       const mod = e.ctrlKey || e.metaKey
@@ -253,7 +255,7 @@ export function ProxyCanvas({ widthPx, heightPx }: ProxyCanvasProps): React.JSX.
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [selectedId, images, view.scale, gridOpen, commitImages, undo, redo])
+  }, [selectedId, images, view.scale, gridOpen, exportOpen, commitImages, undo, redo])
 
   /** 단일 공유 트랜스포머에 선택 노드만 바인딩 — 노드 드래그는 트랜스포머가 자동 추적 */
   useEffect(() => {
@@ -525,6 +527,9 @@ export function ProxyCanvas({ widthPx, heightPx }: ProxyCanvasProps): React.JSX.
           다시실행
         </OverlayButton>
         <OverlayButton onClick={handleFit}>맞춤</OverlayButton>
+        <OverlayButton onClick={() => setExportOpen(true)} disabled={images.length === 0}>
+          내보내기
+        </OverlayButton>
       </div>
 
       {gridOpen && selectedItem && (
@@ -532,6 +537,15 @@ export function ProxyCanvas({ widthPx, heightPx }: ProxyCanvasProps): React.JSX.
           item={selectedItem}
           onConfirm={handleGridConfirm}
           onClose={() => setGridOpen(false)}
+        />
+      )}
+
+      {exportOpen && (
+        <ExportDialog
+          items={images}
+          widthPx={widthPx}
+          heightPx={heightPx}
+          onClose={() => setExportOpen(false)}
         />
       )}
 

@@ -38,11 +38,17 @@ def half_alpha_png(tmp_path: Path) -> Iterator[Path]:
 
 
 def _manifest_dict(
-    output: Path, items: list[dict[str, object]], **canvas: object
+    output: Path,
+    items: list[dict[str, object]],
+    extra: dict[str, object] | None = None,
+    **canvas: object,
 ) -> dict[str, object]:
     base: dict[str, object] = {"width_cm": 10, "height_m": 0.05, "dpi": 350}
     base.update(canvas)
-    return {"output_path": str(output), "canvas": base, "items": items}
+    data: dict[str, object] = {"output_path": str(output), "canvas": base, "items": items}
+    if extra is not None:
+        data.update(extra)
+    return data
 
 
 # --- cm → px 수학 (TS Math.round와 동일 규칙) ---
@@ -107,6 +113,29 @@ def test_parse_manifest_rejects_canvas_over_psd_limit(tmp_path: Path) -> None:
     # 3m(41,339px) — PSD 한계 초과, 오류 메시지에 2m 분할 안내 포함
     with pytest.raises(renderer.ManifestError, match="2m"):
         renderer.parse_manifest(_manifest_dict(tmp_path / "o.psd", [], height_m=3))
+
+
+def test_parse_manifest_format_and_flatten(tmp_path: Path, red_png: Path) -> None:
+    item = {"src": str(red_png), "x_cm": 0, "y_cm": 0, "width_cm": 1, "height_cm": 1, "rotation": 0}
+    defaults = renderer.parse_manifest(_manifest_dict(tmp_path / "o.psd", [item]))
+    assert defaults.fmt == "psd"  # 생략 시 기본값
+    assert defaults.flatten is False
+
+    png = renderer.parse_manifest(
+        _manifest_dict(tmp_path / "o.png", [item], extra={"format": "png", "flatten": True})
+    )
+    assert png.fmt == "png"
+    assert png.flatten is True
+
+
+def test_parse_manifest_rejects_bad_format_and_flatten(tmp_path: Path, red_png: Path) -> None:
+    item = {"src": str(red_png), "x_cm": 0, "y_cm": 0, "width_cm": 1, "height_cm": 1, "rotation": 0}
+    with pytest.raises(renderer.ManifestError, match="format"):
+        renderer.parse_manifest(_manifest_dict(tmp_path / "o.psd", [item], extra={"format": "gif"}))
+    with pytest.raises(renderer.ManifestError, match="format"):
+        renderer.parse_manifest(_manifest_dict(tmp_path / "o.psd", [item], extra={"format": 3}))
+    with pytest.raises(renderer.ManifestError, match="flatten"):
+        renderer.parse_manifest(_manifest_dict(tmp_path / "o.psd", [item], extra={"flatten": "yes"}))
 
 
 # --- 렌더: 배치·치수·픽셀 ---
@@ -226,3 +255,124 @@ def test_render_opaque_image_has_no_mask(tmp_path: Path, red_png: Path) -> None:
     ids = sorted(int(info.id) for info in layer._record.channel_info)
     assert ids == [-1, 0, 1, 2, 3]  # 마스크 없음 — 완전 불투명은 -1 채널만으로 충분
     assert not any(info.id == ChannelID.USER_LAYER_MASK for info in layer._record.channel_info)
+
+
+# --- PNG 출력 (F9 — 알파 보존) ---
+
+
+def test_render_png_preserves_alpha_and_dpi(tmp_path: Path, half_alpha_png: Path) -> None:
+    """PNG 검수 출력 — 합성 알파(백색 잉크 영역)·RGB 색·DPI 메타데이터 보존."""
+    out = tmp_path / "out.png"
+    manifest = renderer.parse_manifest(
+        _manifest_dict(
+            out,
+            [
+                {
+                    "src": str(half_alpha_png),
+                    "x_cm": 1,
+                    "y_cm": 1,
+                    "width_cm": 2,
+                    "height_cm": 1,
+                    "rotation": 0,
+                }
+            ],
+            extra={"format": "png"},
+        )
+    )
+    result = renderer.render_manifest(manifest)
+
+    assert result.output_path == out and out.is_file()
+    assert (result.width_px, result.height_px) == (1378, 689)
+    assert result.layer_count == 1  # PNG은 평면 이미지 1장
+
+    with Image.open(out) as loaded:
+        assert loaded.mode == "RGBA"
+        assert loaded.size == (1378, 689)
+        dpi_x, dpi_y = loaded.info["dpi"]
+        assert abs(dpi_x - 350) < 0.1 and abs(dpi_y - 350) < 0.1  # pHYs 왕복 오차
+        # 배치 (138,138) 276×138 — 좌측 절반 불투명·RGB 색상 보존, 우측·바탕 투명
+        assert loaded.getpixel((138 + 50, 138 + 50)) == (0, 128, 255, 255)
+        assert loaded.getpixel((138 + 220, 138 + 50)) == (0, 0, 0, 0)
+        assert loaded.getpixel((10, 10)) == (0, 0, 0, 0)
+
+
+# --- PSD 병합 옵션 (F8 — 단일 인쇄 레이어) ---
+
+
+def test_render_flatten_psd_single_cmyk_layer(tmp_path: Path, half_alpha_png: Path) -> None:
+    out = tmp_path / "merged.psd"
+    manifest = renderer.parse_manifest(
+        _manifest_dict(
+            out,
+            [
+                {
+                    "src": str(half_alpha_png),
+                    "x_cm": 1,
+                    "y_cm": 1,
+                    "width_cm": 2,
+                    "height_cm": 1,
+                    "rotation": 0,
+                }
+            ],
+            extra={"flatten": True},
+        )
+    )
+    result = renderer.render_manifest(manifest)
+
+    assert result.layer_count == 1
+    psd = PSDImage.open(out)
+    assert psd.color_mode == ColorMode.CMYK
+    (layer,) = list(psd)
+    assert layer.name == renderer.MERGED_LAYER_NAME
+    assert layer.bbox == (0, 0, 1378, 689)  # 캔버스 전체를 덮는 단일 레이어
+    # 캔버스에 투명 영역이 있으므로 합성 알파가 전체 크기 마스크로 보존된다
+    assert layer.mask is not None
+    mask = layer.mask.topil()
+    assert mask is not None
+    assert mask.size == (1378, 689)
+    assert mask.getpixel((138 + 50, 138 + 50)) == 255
+    assert mask.getpixel((10, 10)) == 0
+
+
+# --- 진행 보고 (progress 콜백) ---
+
+
+def test_render_progress_callback_order(tmp_path: Path, red_png: Path) -> None:
+    item = {"src": str(red_png), "x_cm": 0, "y_cm": 0, "width_cm": 1, "height_cm": 1, "rotation": 0}
+    manifest = renderer.parse_manifest(
+        _manifest_dict(tmp_path / "prog.psd", [item, dict(item)])
+    )
+    events: list[tuple[str, int, int]] = []
+    renderer.render_manifest(manifest, on_progress=lambda *e: events.append(e))
+    assert events == [
+        ("items", 1, 2),
+        ("items", 2, 2),
+        ("write", 2, 2),
+    ]
+
+
+def test_render_layered_psd_has_real_composite_preview(tmp_path: Path, red_png: Path) -> None:
+    """레이어 보존 경로(≤1m) — PIL 합성 프리뷰가 백색 배경+항목 색으로 기록된다."""
+    manifest = renderer.parse_manifest(
+        _manifest_dict(
+            tmp_path / "preview.psd",
+            [
+                {
+                    "src": str(red_png),
+                    "x_cm": 1,
+                    "y_cm": 1,
+                    "width_cm": 2,
+                    "height_cm": 1,
+                    "rotation": 0,
+                }
+            ],
+        )
+    )
+    renderer.render_manifest(manifest)
+
+    psd = PSDImage.open(tmp_path / "preview.psd")
+    preview = psd.topil()
+    assert preview is not None
+    # 항목(138..414 × 138..276) 안은 빨강 CMYK, 바깥은 흰 배경(0,0,0,0)
+    assert preview.getpixel((200, 200)) == (0, 255, 255, 0)
+    assert preview.getpixel((10, 10)) == (0, 0, 0, 0)

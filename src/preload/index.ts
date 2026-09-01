@@ -1,12 +1,21 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import { electronAPI } from '@electron-toolkit/preload'
-import type { DtfApi } from '../types/ipc'
+import type { DtfApi, ExportProgress } from '../types/ipc'
 
 // Custom APIs for renderer — 경로만 주고받는다 (바이너리 IPC 금지)
 const api: DtfApi = {
   openImages: (): Promise<string[] | null> => ipcRenderer.invoke('dialog:open-images'),
   importImage: (filePath: string) => ipcRenderer.invoke('image:import', filePath),
-  getPathForFile: (file: File): string => webUtils.getPathForFile(file)
+  getPathForFile: (file: File): string => webUtils.getPathForFile(file),
+  exportSaveDialog: (format) => ipcRenderer.invoke('export:save-dialog', format),
+  exportDocument: (manifest) => ipcRenderer.invoke('export:render', manifest),
+  cancelExport: () => ipcRenderer.invoke('export:cancel'),
+  onExportProgress: (listener: (progress: ExportProgress) => void): (() => void) => {
+    const wrapped = (_e: Electron.IpcRendererEvent, progress: ExportProgress): void =>
+      listener(progress)
+    ipcRenderer.on('export:progress', wrapped)
+    return () => ipcRenderer.removeListener('export:progress', wrapped)
+  }
 }
 
 // Use `contextBridge` APIs to expose Electron APIs to

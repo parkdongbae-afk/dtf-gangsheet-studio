@@ -128,3 +128,64 @@ body {
   color: #0f172a;
   font-weight: 700;
 }
+
+.grid-dialog-actions button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.export-dialog {
+  min-width: 380px;
+}
+
+.export-dialog-fields {
+  display: flex;
+  gap: 1.25rem;
+  margin-bottom: 0.5rem;
+}
+
+.export-dialog-fields label,
+.export-dialog-flatten {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  cursor: pointer;
+}
+
+.export-dialog-progress {
+  margin: 0.5rem 0 0.25rem;
+}
+
+.export-dialog-progress-bar {
+  height: 8px;
+  border-radius: 4px;
+  background: #1e293b;
+  border: 1px solid #475569;
+  overflow: hidden;
+}
+
+.export-dialog-progress-fill {
+  height: 100%;
+  background: #0ea5e9;
+  transition: width 120ms ease-out;
+}
+
+.export-dialog-result {
+  margin: 0.75rem 0;
+  color: #4ade80;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  word-break: break-all;
+}
+
+.export-dialog-path {
+  color: #94a3b8;
+  font-weight: 400;
+  font-size: 12px;
+}
+
+.export-dialog-error {
+  white-space: pre-wrap;
+  word-break: break-all;
+  margin: 0.75rem 0;
+}

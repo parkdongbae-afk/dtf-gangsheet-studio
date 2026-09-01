@@ -15,6 +15,9 @@ from pathlib import Path
 import numpy as np
 from PIL import Image, ImageCms
 
+# GCR 스트립 행 수 — 1,024행 × 6,890px 기준 float64 천이 ~600MB로 상한
+GCR_STRIP_ROWS = 1024
+
 
 class ColorConversionError(Exception):
     """색상 변환 오류 기본 타입."""
@@ -70,8 +73,20 @@ def _convert_gcr(image: Image.Image) -> Image.Image:
     """표준 GCR 수식 변환 — K=1-max(R,G,B), 잉크 총량 최소화.
 
     순백·순흑처럼 분모(1-K)가 0이 되는 영역은 CMY=0으로 가드한다.
+    스트립 단위 처리(수학은 픽셀별 동일) — 풀캔버스 float64 스택은
+    2m(190M px)에서 5.66GiB를 요구해 MemoryError가 난다(S6-2 실측).
     """
-    rgb = np.asarray(image, dtype=np.float64) / 255.0
+    height = image.height
+    out = Image.new("CMYK", image.size)
+    for top in range(0, height, GCR_STRIP_ROWS):
+        bottom = min(top + GCR_STRIP_ROWS, height)
+        strip = image.crop((0, top, image.width, bottom))
+        out.paste(_gcr_strip(strip), (0, top))
+    return out
+
+
+def _gcr_strip(strip: Image.Image) -> Image.Image:
+    rgb = np.asarray(strip, dtype=np.float64) / 255.0
     r, g, b = rgb[..., 0], rgb[..., 1], rgb[..., 2]
     k = 1.0 - np.maximum(np.maximum(r, g), b)
     ink = 1.0 - k  # == max(R, G, B)

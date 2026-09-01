@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 from PIL import Image
 from psd_tools import PSDImage
-from psd_tools.constants import ColorMode, Resource
+from psd_tools.constants import ColorMode, Compression, Resource
 
 import color
 import psd_writer
@@ -167,3 +167,54 @@ def test_write_psd_rejects_alpha_size_and_mode_mismatch(tmp_path: Path) -> None:
     with pytest.raises(psd_writer.PsdWriterError, match="alpha"):
         bad_mode = psd_writer.LayerSpec(cmyk, "x", 0, 0, alpha=Image.new("RGB", (60, 40)))
         psd_writer.write_psd(tmp_path / "bad.psd", (200, 200), [bad_mode])
+
+
+def test_write_psd_solid_composite_path_for_huge_canvas(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """임계치 초과(2m) 경로 — 단색 프리뷰 주입으로 풀캔버스 합성 우회.
+
+    실제 2m 캔버스를 그리면 테스트가 수 GB를 쓰므로 임계치를 0으로 낮려
+    분기를 강제한다. 레이어 픽셀·해상도 리소스는 실합성 경로와 동일하게
+    보존되어야 한다(Photoshop은 레이어로 재합성 — 프리뷰는 메타데이터).
+    """
+    monkeypatch.setattr(psd_writer, "PREVIEW_COMPOSITE_MAX_PX", 0)
+    path = tmp_path / "huge.psd"
+    psd_writer.write_psd(path, CANVAS_SIZE, _spike_layers())
+
+    psd = _open(path)
+    assert psd.color_mode == ColorMode.CMYK
+    assert sorted(layer.name for layer in psd) == ["blue", "red", "yellow"]
+    red = _layer_by_name(psd, "red")
+    assert (red.left, red.top) == (-50, -50)
+    decoded = red.topil()
+    assert decoded is not None
+    assert decoded.getpixel((0, 0)) == (0, 255, 255, 0)
+    h_res, _, _, v_res, _, _ = _raw_resolution_block(path.read_bytes())
+    assert h_res / 0x10000 == pytest.approx(350.0)
+    assert v_res / 0x10000 == pytest.approx(350.0)
+    # 단색 RLE 프리뷰가 실제 기록됐는지 — 압축 플래그와 데이터 존재
+    assert psd._record.image_data.compression == Compression.RLE
+    assert len(psd._record.image_data.data) > 0
+
+
+def test_write_psd_real_composite_preview_roundtrip(tmp_path: Path) -> None:
+    """호출자 합성 프리뷰 주입 — 반전 저장 후 psd-tools 읽기로 원색 복원(수 초 저장 경로)."""
+    preview = _solid_cmyk((200, 120), (255, 0, 0))  # PIL 의미 빨강 CMYK
+    path = tmp_path / "preview.psd"
+    psd_writer.write_psd(path, (200, 120), _spike_layers()[:1], preview=preview)
+
+    psd = _open(path)
+    decoded = psd.topil()
+    assert decoded is not None
+    assert decoded.mode == "CMYK"
+    # 프리뷰 전체가 빨강(0,255,255,0)으로 라운드트립 — 반전 저장 의미론 단정
+    assert decoded.getpixel((5, 5)) == (0, 255, 255, 0)
+    assert decoded.getpixel((150, 90)) == (0, 255, 255, 0)
+
+
+def test_write_psd_rejects_non_cmyk_preview(tmp_path: Path) -> None:
+    with pytest.raises(psd_writer.PsdWriterError, match="preview"):
+        psd_writer.write_psd(
+            tmp_path / "bad.psd", (100, 100), [], preview=Image.new("RGB", (100, 100))
+        )

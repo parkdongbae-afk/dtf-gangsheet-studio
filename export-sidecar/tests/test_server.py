@@ -100,7 +100,9 @@ def test_unknown_method_maps_to_32601() -> None:
 def test_internal_error_maps_to_32603(
     tmp_path: Path, sample_png: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    def boom(manifest: renderer.Manifest) -> renderer.RenderResult:
+    def boom(
+        manifest: renderer.Manifest, on_progress: object = None
+    ) -> renderer.RenderResult:
         raise RuntimeError("disk exploded")
 
     monkeypatch.setattr(renderer, "render_manifest", boom)
@@ -156,13 +158,55 @@ def test_serve_frames_each_response_per_line(tmp_path: Path, sample_png: Path) -
     writer = io.StringIO()
     server.serve(reader, writer)
 
-    responses = [json.loads(line) for line in writer.getvalue().splitlines()]
+    messages = [json.loads(line) for line in writer.getvalue().splitlines()]
+    responses = [m for m in messages if "method" not in m]
+    notifications = [m for m in messages if "method" in m]
+
     assert len(responses) == 3
     assert responses[0]["error"]["code"] == server.PARSE_ERROR
     assert responses[1]["id"] == "a"
     assert responses[2]["id"] == 7
     assert responses[2]["result"]["layer_count"] == 1
+    # render 요청은 항목·저장 단계 progress 알림을 응답보다 먼저 발신한다
+    assert [n["method"] for n in notifications] == ["progress", "progress"]
+    assert all(n["params"]["total"] == 1 for n in notifications)
     assert writer.getvalue().endswith("\n")
+
+
+def test_render_emits_progress_notifications(tmp_path: Path, sample_png: Path) -> None:
+    out = tmp_path / "prog.psd"
+    events: list[dict[str, object]] = []
+    response = server.handle_message(
+        _rpc("render", _manifest(out, sample_png)), notifier=events.append
+    )
+    assert response is not None
+    assert response["id"] == 1
+    assert [(e["stage"], e["current"], e["total"]) for e in events] == [
+        ("items", 1, 1),
+        ("write", 1, 1),
+    ]
+
+
+def test_bare_manifest_emits_no_progress_lines(tmp_path: Path, sample_png: Path) -> None:
+    """베어 매니페스트 원샷 — 진행 알림 없이 결과 1줄만(S6-1 CLI 파이프 계약)."""
+    out = tmp_path / "bare.psd"
+    writer = io.StringIO()
+    server.serve(io.StringIO(json.dumps(_manifest(out, sample_png)) + "\n"), writer)
+    lines = writer.getvalue().splitlines()
+    assert len(lines) == 1
+    assert json.loads(lines[0])["result"]["output_path"] == str(out)
+
+
+def test_bare_manifest_error_returns_response_not_crash(tmp_path: Path) -> None:
+    """베어 모드 렌더 실패 — 프로세스 크래시 대신 오류 응답 1줄(_dispatch와 동일 계약)."""
+    bad = _manifest(tmp_path / "o.psd", tmp_path / "ghost.png")
+    response = server.handle_message(bad)
+    assert response is not None
+    assert response["id"] is None
+    error = response["error"]
+    assert isinstance(error, dict)
+    assert error["code"] == server.INVALID_PARAMS
+    assert "ghost.png" in str(error["message"])
 
 
 def test_serve_shutdown_stops_loop_after_response() -> None:

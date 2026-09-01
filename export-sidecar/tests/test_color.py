@@ -41,3 +41,19 @@ def test_rgb_to_cmyk_rejects_alpha_input() -> None:
     # 알파(DTF 백색 잉크)는 이 변환의 범위 밖 — 조용한 유실 금지, 타입 오류로 거부
     with pytest.raises(color.UnsupportedImageModeError):
         color.rgb_to_cmyk(Image.new("RGBA", (1, 1), (255, 0, 0, 128)))
+
+
+def test_rgb_to_cmyk_strip_boundaries_are_seamless() -> None:
+    # 스트립 청크 처리(S6-2 메모리 상한) — 경계행이 단일 계산과 동일한지
+    width = 37
+    height = color.GCR_STRIP_ROWS * 2 + 11
+    gradient = Image.new("RGB", (width, height))
+    for y in range(height):
+        for x in range(width):
+            gradient.putpixel((x, y), ((x * 7) % 256, (y * 5) % 256, (x + y) % 256))
+    cmyk = color.rgb_to_cmyk(gradient)
+    assert cmyk.size == (width, height)
+    for y in (0, color.GCR_STRIP_ROWS - 1, color.GCR_STRIP_ROWS, height - 1):
+        single = color.rgb_to_cmyk(gradient.crop((0, y, width, y + 1)))
+        for x in range(width):
+            assert cmyk.getpixel((x, y)) == single.getpixel((x, 0)), f"seam mismatch at y={y}"

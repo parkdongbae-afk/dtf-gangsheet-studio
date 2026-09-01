@@ -3,6 +3,7 @@ import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
 import { registerImageImportIpc } from './ipc/imageImport'
+import { registerExportIpc, runExportTestHook } from './ipc/export'
 
 function createWindow(): void {
   // Create the browser window.
@@ -60,8 +61,12 @@ app.whenReady().then(() => {
   ipcMain.on('ping', () => console.log('pong'))
 
   registerImageImportIpc()
+  registerExportIpc()
 
   createWindow()
+
+  // E2E 내보내기 자동검증(DTF_EXPORT_TEST=매니페스트 경로) — 렌더 후 자동 종료
+  void runExportTestHook()
 
   app.on('activate', function () {
     // On macOS it's common to re-create a window in the app when the

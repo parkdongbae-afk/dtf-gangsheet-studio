@@ -103,4 +103,28 @@ describe('buildExportManifest', () => {
     })
     expect(manifest.canvas.dpi).toBe(350)
   })
+
+  it('format·flatten은 기본값(psd·false)일 때 생략된다', () => {
+    const manifest = buildExportManifest({
+      outputPath: 'C:/out.psd',
+      widthPx: 6890,
+      heightPx: 13780,
+      items: [item()]
+    })
+    expect(manifest.format).toBeUndefined()
+    expect(manifest.flatten).toBeUndefined()
+  })
+
+  it('PNG 포맷·병합 옵션을 지정하면 매니페스트에 반영된다 (F8·F9)', () => {
+    const manifest = buildExportManifest({
+      outputPath: 'C:/out.png',
+      widthPx: 6890,
+      heightPx: 13780,
+      items: [item()],
+      format: 'png',
+      flatten: true
+    })
+    expect(manifest.format).toBe('png')
+    expect(manifest.flatten).toBe(true)
+  })
 })

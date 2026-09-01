@@ -24,14 +24,20 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
 
-from PIL import Image
+from PIL import Image, ImageChops
 from psd_tools import PSDImage
 from psd_tools.api.layers import PixelLayer
-from psd_tools.constants import Resource
+from psd_tools.constants import Compression, Resource
+from psd_tools.psd.image_data import ImageData
 from psd_tools.psd.image_resources import ImageResource
 
 EXPORT_DPI: Final[int] = 350
 PSD_MAX_PX: Final[int] = 30_000
+# psd-tools save()는 레이어 변경 시 풀캔버스 float32 합성을 강제한다 —
+# 2m(190M px)에서는 할당이 2.8GiB를 넘어 MemoryError. 이 임계치(≈1m)까지는
+# psd-tools 실합성 프리뷰, 초과 시 단색 프리뷰 주입으로 우회한다(Photoshop은
+# 레이어로 재합성하므로 화면 표시에는 영향 없음).
+PREVIEW_COMPOSITE_MAX_PX: Final[int] = 100_000_000
 _PIXELS_PER_INCH: Final[int] = 1  # ResolutionInfo 단위 코드: 1 = px/inch
 _INCH_UNIT: Final[int] = 1  # 폭·높이 표시 단위: 1 = inch
 _FIXED_POINT_SCALE: Final[int] = 65_536  # 16.16 fixed-point
@@ -77,8 +83,24 @@ class LayerSpec:
     alpha: Image.Image | None = None
 
 
-def write_psd(path: Path, size: tuple[int, int], layers: Sequence[LayerSpec]) -> None:
+def write_psd(
+    path: Path,
+    size: tuple[int, int],
+    layers: Sequence[LayerSpec],
+    preview: Image.Image | None = None,
+) -> None:
     """CMYK PSD 생성·저장 — Color Mode 4 · 350 DPI · 음수 좌표 보존.
+
+    프리뷰(합성 이미지 섹션) 전략 — psd-tools ``save()``는 레이어 갱신 시
+    풀캔버스 float32 합성으로 저장에 ~95초/1m·2m에선 MemoryError를 낸다:
+
+    - ``preview`` 전달(≤1m 권장): 호출자가 만든 PIL CMYK 합성을 반전 저장
+      (Photoshop·psd-tools 읽기 의미론과 동일한 실합성 프리뷰)
+    - ``preview=None`` & 캔버스 > :data:`PREVIEW_COMPOSITE_MAX_PX`(2m):
+      단색 프리뷰 주입으로 합성 우회
+    - 그 외: psd-tools 기본 실합성(느림 — 하위호환 폴백)
+
+    Photoshop은 개봉 시 레이어로 재합성하므로 어느 경로든 표시는 동일하다.
 
     :raises CanvasSizeError: 캔버스 변 길이가 1..30,000px 범위 밖인 경우
     :raises NonCmykLayerError: 레이어 이미지가 CMYK 모드가 아닌 경우
@@ -94,7 +116,43 @@ def write_psd(path: Path, size: tuple[int, int], layers: Sequence[LayerSpec]) ->
         if spec.alpha is not None:
             _attach_alpha(layer, spec)
     psd.image_resources[Resource.RESOLUTION_INFO] = _resolution_info(EXPORT_DPI)
+    if preview is not None:
+        _set_real_composite(psd, preview)
+    elif width * height > PREVIEW_COMPOSITE_MAX_PX:
+        _set_solid_composite(psd)
     psd.save(path)
+
+
+def _set_real_composite(psd: PSDImage, preview: Image.Image) -> None:
+    """호출자 합성(PIL 의미 CMYK)을 반전해 프리뷰로 저장 — 저장 시 합성 우회.
+
+    PSD 규격은 CMYK 채널을 반전 저장하고 psd-tools 읽기(post_process)는
+    이를 재반전하므로, 여기서 ``ImageChops.invert`` 로 맞춘다
+    (``PixelLayer.frompil`` 이 레이어 채널에 하던 것과 대칭).
+    """
+    if preview.mode != "CMYK":
+        raise PsdWriterError(f"preview must be a CMYK image, got {preview.mode!r}")
+    stored = ImageChops.invert(preview)
+    psd._record.image_data.set_data(
+        [channel.tobytes() for channel in stored.split()], psd._record.header
+    )
+    psd._updated = False
+
+
+def _set_solid_composite(psd: PSDImage) -> None:
+    """단색(백색=무잉크) 프리뷰 주입 후 갱신 플래그 해제.
+
+    psd-tools의 비공개 ``_record``·``_updated``에 접근한다 — save()가
+    ``is_updated()``일 때 풀캔버스 합성을 강제하기 때문이며, 이 우회가
+    없으면 2m 문서에서 MemoryError가 발생한다(모듈 머리글).
+    RLE 압축 단색 평면은 수십 KB에 그친다. Photoshop은 개봉 시 레이어로
+    재합성하므로 표시 결과는 동일하다.
+    """
+    header = psd._record.header
+    psd._record.image_data = ImageData.new(
+        header, color=255, compression=Compression.RLE
+    )
+    psd._updated = False
 
 
 def _attach_alpha(layer: PixelLayer, spec: LayerSpec) -> None:
