@@ -27,9 +27,13 @@ win:
   icon: build/icon.ico
   target:
     - nsis
+    # 단독 실행 파일(설치 불필요) — 자동 압축해제 후 실행되는 portable exe
+    - portable
 nsis:
   artifactName: ${name}-${version}-setup.${ext}
   shortcutName: ${productName}
   uninstallDisplayName: ${productName}
   createDesktopShortcut: always
+portable:
+  artifactName: ${name}-${version}-portable.${ext}
 npmRebuild: false

@@ -3,6 +3,7 @@ import type Konva from 'konva'
 import type { Box } from 'konva/lib/shapes/Transformer'
 import { Image, Layer, Rect, Stage, Transformer } from 'react-konva'
 import {
+  Boxes,
   Expand,
   FileOutput,
   Grid3x3,
@@ -14,6 +15,8 @@ import {
 } from 'lucide-react'
 import { ExportDialog } from './ExportDialog'
 import { GridDialog } from './GridDialog'
+import { NestingDialog } from './NestingDialog'
+import { packImages } from './autoNesting'
 import {
   calculateGridPositions,
   centeredTopLeft,
@@ -125,6 +128,7 @@ export function ProxyCanvas({ widthPx, heightPx }: ProxyCanvasProps): React.JSX.
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [gridOpen, setGridOpen] = useState(false)
   const [exportOpen, setExportOpen] = useState(false)
+  const [nestingOpen, setNestingOpen] = useState(false)
   /** 배경 제거 진행 중 — 사이드카 추론(첫 요청은 모델 다운로드 포함) 동안 버튼 잠금 */
   const [removeBusy, setRemoveBusy] = useState(false)
 
@@ -194,7 +198,7 @@ export function ProxyCanvas({ widthPx, heightPx }: ProxyCanvasProps): React.JSX.
   /** 스페이스 홀드 = 팬 모드 (커서 grab + Stage 드래그 활성) — 텍스트 입력·모달 중 무시 */
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent): void => {
-      if (gridOpen || exportOpen || isEditableTarget(e.target)) return
+      if (gridOpen || exportOpen || nestingOpen || isEditableTarget(e.target)) return
       if (e.code === 'Space' && !e.repeat) {
         e.preventDefault()
         setSpaceDown(true)
@@ -212,7 +216,7 @@ export function ProxyCanvas({ widthPx, heightPx }: ProxyCanvasProps): React.JSX.
       window.removeEventListener('keyup', onKeyUp)
       window.removeEventListener('blur', onBlur)
     }
-  }, [gridOpen, exportOpen])
+  }, [gridOpen, exportOpen, nestingOpen])
 
   /**
    * 씬 편집 단축키 (통합) — Ctrl+Z=실행취소, Ctrl+Shift+Z/Ctrl+Y=다시실행(선택 불필요),
@@ -220,7 +224,7 @@ export function ProxyCanvas({ widthPx, heightPx }: ProxyCanvasProps): React.JSX.
    * 대화상자 모달 중·텍스트 입력 포커스 중에는 전면 무시한다.
    */
   useEffect(() => {
-    if (gridOpen || exportOpen) return
+    if (gridOpen || exportOpen || nestingOpen) return
     const onKeyDown = (e: KeyboardEvent): void => {
       if (isEditableTarget(e.target)) return
       const mod = e.ctrlKey || e.metaKey
@@ -266,7 +270,7 @@ export function ProxyCanvas({ widthPx, heightPx }: ProxyCanvasProps): React.JSX.
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [selectedId, images, view.scale, gridOpen, exportOpen, commitImages, undo, redo])
+  }, [selectedId, images, view.scale, gridOpen, exportOpen, nestingOpen, commitImages, undo, redo])
 
   /** 단일 공유 트랜스포머에 선택 노드만 바인딩 — 노드 드래그는 트랜스포머가 자동 추적 */
   useEffect(() => {
@@ -369,6 +373,30 @@ export function ProxyCanvas({ widthPx, heightPx }: ProxyCanvasProps): React.JSX.
       )
     },
     [selectedItem, widthPx, heightPx, commitImages]
+  )
+
+  /** 자동 배치 확정 (BATCH.md) — MaxRects 패킹 결과를 히스토리 커밋해 Ctrl+Z 복구 지원.
+   *  미배치(캔버스 초과) 항목은 현재 위치를 그대로 둔다. */
+  const handleNestingConfirm = useCallback(
+    (gapCm: number, allowRotation: boolean): void => {
+      const result = packImages(images, {
+        canvasWidthPx: widthPx,
+        canvasHeightPx: heightPx,
+        gapCm,
+        dpi: 350,
+        allowRotation
+      })
+      setNestingOpen(false)
+      if (result.packedItems.length === 0) return
+      const placementById = new Map(result.packedItems.map((p) => [p.id, p]))
+      commitImages((prev) =>
+        prev.map((img) => {
+          const p = placementById.get(img.id)
+          return p ? { ...img, x: p.x, y: p.y, rotation: p.rotation } : img
+        })
+      )
+    },
+    [images, widthPx, heightPx, commitImages]
   )
 
   /** 속성 패널 — 선택 항목 수치 편집 커밋 (cm→px 변환은 패널 담당, 여기선 절대 px만) */
@@ -596,6 +624,15 @@ export function ProxyCanvas({ widthPx, heightPx }: ProxyCanvasProps): React.JSX.
               안에 맞춤
             </OverlayButton>
             <div className="mx-0.5 h-5 w-px bg-zinc-800" />
+            <OverlayButton
+              onClick={() => setNestingOpen(true)}
+              disabled={images.length === 0}
+              title="자동 배치 (MaxRects 밀집 패킹)"
+            >
+              <Boxes size={14} strokeWidth={1.5} />
+              자동 배치
+            </OverlayButton>
+            <div className="mx-0.5 h-5 w-px bg-zinc-800" />
             <OverlayButton onClick={undo} disabled={!canUndo} title="실행취소 (Ctrl+Z)">
               <Undo2 size={14} strokeWidth={1.5} />
               실행취소
@@ -627,6 +664,16 @@ export function ProxyCanvas({ widthPx, heightPx }: ProxyCanvasProps): React.JSX.
             item={selectedItem}
             onConfirm={handleGridConfirm}
             onClose={() => setGridOpen(false)}
+          />
+        )}
+
+        {nestingOpen && images.length > 0 && (
+          <NestingDialog
+            items={images}
+            widthPx={widthPx}
+            heightPx={heightPx}
+            onConfirm={handleNestingConfirm}
+            onClose={() => setNestingOpen(false)}
           />
         )}
 
