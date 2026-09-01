@@ -1,0 +1,32 @@
+[project]
+name = "export-sidecar"
+version = "0.1.0"
+description = "DTF GangSheet Studio 내보내기 엔진 — psd-tools 기반 CMYK(ColorMode 4)·350DPI PSD 라이터"
+requires-python = ">=3.12"
+dependencies = [
+    "psd-tools>=1.9",
+    "Pillow>=10.4",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.6",
+    "pyright>=1.1.378",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+# 평면 모듈 구조(CLAUDE.md §2.1): 패키지 디렉터리 없이 최상위 모듈로 배포
+[tool.hatch.build.targets.wheel]
+only-include = ["renderer.py", "color.py", "psd_writer.py", "server.py"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
