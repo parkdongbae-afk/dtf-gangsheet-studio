@@ -125,3 +125,48 @@ export function calculateGridPositions(
   }
   return cells
 }
+
+/** 화면 채우기 모드 — cover=문서를 완전히 덮음(잘림 허용), contain=문서 안에 전체 수납 */
+export type FitMode = 'cover' | 'contain'
+
+/** 화면 채우기 계산 입력 — 항목은 항상 문서 중심에 재배치되므로 원본 x/y는 결과에 무관 */
+export interface FitSource {
+  x: number
+  y: number
+  widthPx: number
+  heightPx: number
+  rotation: number
+}
+
+/**
+ * 화면 채우기 (S5 세션 3) — 항목을 문서 폭/높이 기준으로 비율 유지 확대·축소 후 문서 중심에 배치.
+ *
+ * - 회전 항목은 회전 바운딩 박스(|w·cosθ|+|h·sinθ| × |w·sinθ|+|h·cosθ|) 기준으로 스케일 k 산출:
+ *   cover=max(docW/bboxW, docH/bboxH), contain=min(...). 바운딩 박스는 k에 선형 비례한다.
+ * - 커밋은 절대 px(w·k, h·k)만 — 치수 float 반올림 없음, 회전각은 원값 보존(이미 정규화됨).
+ * - Konva 회전은 노드 원점(x,y) 기준이므로 로컬 중심 (w/2, h/2)의 회전 변환량만큼
+ *   보정해 항목 중심을 문서 중심에 정렬한다.
+ */
+export function fitToCanvas(
+  item: FitSource,
+  docW: number,
+  docH: number,
+  mode: FitMode
+): PlacedTransform {
+  const rad = (item.rotation * Math.PI) / 180
+  const cos = Math.cos(rad)
+  const sin = Math.sin(rad)
+  const bboxW = item.widthPx * Math.abs(cos) + item.heightPx * Math.abs(sin)
+  const bboxH = item.widthPx * Math.abs(sin) + item.heightPx * Math.abs(cos)
+  const k =
+    mode === 'cover' ? Math.max(docW / bboxW, docH / bboxH) : Math.min(docW / bboxW, docH / bboxH)
+  const widthPx = item.widthPx * k
+  const heightPx = item.heightPx * k
+  return {
+    x: docW / 2 - (cos * widthPx - sin * heightPx) / 2,
+    y: docH / 2 - (sin * widthPx + cos * heightPx) / 2,
+    widthPx,
+    heightPx,
+    rotation: item.rotation
+  }
+}

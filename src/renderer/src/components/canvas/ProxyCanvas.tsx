@@ -8,10 +8,12 @@ import {
   centeredTopLeft,
   commitTransform,
   duplicateOffset,
+  fitToCanvas,
   normalizeRotation,
   screenToDoc,
   viewCenterDoc,
   type DocPoint,
+  type FitMode,
   type NodeTransformReading,
   type ViewTransform
 } from './placement'
@@ -54,6 +56,8 @@ const DOC_BACKGROUND = 'doc-background'
 const SELECTION_STROKE = '#0ea5e9'
 /** 리사이즈 최소 치수 (절대 px) — 반전·음수 치수 방지 (표준 Konva 레시피) */
 const MIN_TRANSFORM_PX = 5
+/** undo 히스토리 상한 (단계) — 초과분은 가장 오래된 스냅샷부터 폐기 */
+const UNDO_LIMIT = 100
 
 const boundMinSize = (oldBox: Box, newBox: Box): Box =>
   newBox.width < MIN_TRANSFORM_PX || newBox.height < MIN_TRANSFORM_PX ? oldBox : newBox
@@ -103,11 +107,64 @@ export function ProxyCanvas({ widthPx, heightPx }: ProxyCanvasProps): React.JSX.
     fitView(widthPx, heightPx, window.innerWidth, window.innerHeight)
   )
   const [images, setImages] = useState<PlacedImage[]>([])
+  /**
+   * 실행취소 히스토리 — PlacedImage[] JSON 스냅샷만 저장 (Konva 객체 저장 금지 철칙).
+   * 스냅샷은 배열 참조를 그대로 두는데, 씬 갱신은 항상 spread/map으로 새 배열을 만들므로
+   * 참조가 불변이라는 규칙이 성립한다 (dataUrl 문자열 중복 복사 방지).
+   */
+  const [history, setHistory] = useState<{ past: PlacedImage[][]; future: PlacedImage[][] }>({
+    past: [],
+    future: []
+  })
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [gridOpen, setGridOpen] = useState(false)
 
-  /** 현재 선택 항목 — 그리드 복제 기준 (렌더 스코프에서 해석: 순수 updater 유지) */
+  /** 현재 선택 항목 — 그리드 복제·화면 채우기 기준 (렌더 스코프에서 해석: 순수 updater 유지) */
   const selectedItem = selectedId ? (images.find((img) => img.id === selectedId) ?? null) : null
+
+  const { past, future } = history
+
+  /**
+   * 히스토리 기록 씬 변경 커밋 — 모든 이미지 변경 경로의 단일 관문. 변경 전 스냅샷을
+   * past에 push(상한 100)하고 future를 폐기해 새 변경 이후의 redo를 무효화한다.
+   * 업데이터는 순수 함수만 받는다(StrictMode 이중 호출 안전 — randomUUID는 밖에서).
+   */
+  const commitImages = useCallback(
+    (updater: (prev: PlacedImage[]) => PlacedImage[]): void => {
+      setHistory((h) => ({ past: [...h.past, images].slice(-UNDO_LIMIT), future: [] }))
+      setImages(updater)
+    },
+    [images]
+  )
+
+  /** 실행취소 — past 마지막 스냅샷으로 복원, 현재 상태는 future로 이동.
+   *  복원 씬에 선택 항목이 없으면 선택 해제(트랜스포머 유령 방지) — id를 제거하는 경로는
+   *  삭제(명시적 해제)·undo/redo뿐이므로 여기서 가드하면 충분하다. */
+  const undo = useCallback((): void => {
+    if (past.length === 0) return
+    const prev = past[past.length - 1]
+    setHistory((h) => ({
+      past: h.past.slice(0, -1),
+      future: [images, ...h.future].slice(0, UNDO_LIMIT)
+    }))
+    setImages(prev)
+    if (selectedId && !prev.some((img) => img.id === selectedId)) setSelectedId(null)
+  }, [past, images, selectedId])
+
+  /** 다시실행 — future 선두 스냅샷 재적용, 현재 상태는 past로 이동 (선택 가드는 undo와 동일) */
+  const redo = useCallback((): void => {
+    if (future.length === 0) return
+    const next = future[0]
+    setHistory((h) => ({
+      past: [...h.past, images].slice(-UNDO_LIMIT),
+      future: h.future.slice(1)
+    }))
+    setImages(next)
+    if (selectedId && !next.some((img) => img.id === selectedId)) setSelectedId(null)
+  }, [future, images, selectedId])
+
+  const canUndo = past.length > 0
+  const canRedo = future.length > 0
 
   /** 뷰포트(창) 리사이즈 추적 — 조작 이력 없으면 문서를 다시 맞춤 */
   useEffect(() => {
@@ -145,29 +202,40 @@ export function ProxyCanvas({ widthPx, heightPx }: ProxyCanvasProps): React.JSX.
   }, [gridOpen])
 
   /**
-   * Del/Backspace = 삭제, R = 90° 회전, Ctrl/Cmd+D = 복제(화면 24px 오프셋 — 캐스케이드 규칙).
-   * 대화상자 모달 중·텍스트 입력 포커스 중에는 무시한다.
+   * 씬 편집 단축키 (통합) — Ctrl+Z=실행취소, Ctrl+Shift+Z/Ctrl+Y=다시실행(선택 불필요),
+   * Del/Backspace=삭제, R=90° 회전, Ctrl/Cmd+D=복제(화면 24px 오프셋 — 캐스케이드 규칙).
+   * 대화상자 모달 중·텍스트 입력 포커스 중에는 전면 무시한다.
    */
   useEffect(() => {
-    if (!selectedId || gridOpen) return
+    if (gridOpen) return
     const onKeyDown = (e: KeyboardEvent): void => {
       if (isEditableTarget(e.target)) return
+      const mod = e.ctrlKey || e.metaKey
+      if (mod && 'zyZY'.includes(e.key)) {
+        e.preventDefault() // 브라우저/Electron 기본 undo·redo 차단
+        if (e.repeat) return // 키 홀드 폭주 방지 — 단위 스텝만
+        const isRedo = e.key === 'y' || e.key === 'Y' || e.shiftKey
+        if (isRedo) redo()
+        else undo()
+        return
+      }
+      if (!selectedId) return
       if (e.key === 'Delete' || e.key === 'Backspace') {
         e.preventDefault()
-        setImages((prev) => prev.filter((img) => img.id !== selectedId))
+        commitImages((prev) => prev.filter((img) => img.id !== selectedId))
         setSelectedId(null)
         return
       }
       if ((e.key === 'r' || e.key === 'R') && !e.repeat) {
         e.preventDefault()
-        setImages((prev) =>
+        commitImages((prev) =>
           prev.map((img) =>
             img.id === selectedId ? { ...img, rotation: normalizeRotation(img.rotation + 90) } : img
           )
         )
         return
       }
-      if ((e.ctrlKey || e.metaKey) && (e.key === 'd' || e.key === 'D')) {
+      if (mod && (e.key === 'd' || e.key === 'D')) {
         e.preventDefault() // 브라우저 기본 동작(북마크) 차단 — Electron에서도 명시 차단
         if (e.repeat) return
         const item = images.find((img) => img.id === selectedId)
@@ -179,13 +247,13 @@ export function ProxyCanvas({ widthPx, heightPx }: ProxyCanvasProps): React.JSX.
           x: item.x + offset,
           y: item.y + offset
         }
-        setImages((prev) => [...prev, copy])
+        commitImages((prev) => [...prev, copy])
         setSelectedId(copy.id)
       }
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [selectedId, images, view.scale, gridOpen])
+  }, [selectedId, images, view.scale, gridOpen, commitImages, undo, redo])
 
   /** 단일 공유 트랜스포머에 선택 노드만 바인딩 — 노드 드래그는 트랜스포머가 자동 추적 */
   useEffect(() => {
@@ -237,16 +305,22 @@ export function ProxyCanvas({ widthPx, heightPx }: ProxyCanvasProps): React.JSX.
     [spaceDown]
   )
 
-  /** 이미지 드래그 이동 확정 — 문서 좌표(절대 px)를 상태로 커밋 */
-  const handleMove = useCallback((id: string, x: number, y: number): void => {
-    setImages((prev) => prev.map((img) => (img.id === id ? { ...img, x, y } : img)))
-  }, [])
+  /** 이미지 드래그 이동 확정 — 문서 좌표(절대 px)를 히스토리 커밋 */
+  const handleMove = useCallback(
+    (id: string, x: number, y: number): void => {
+      commitImages((prev) => prev.map((img) => (img.id === id ? { ...img, x, y } : img)))
+    },
+    [commitImages]
+  )
 
-  /** 이미지 트랜스폼 확정 — 임시 scale이 확정된 절대 px 치수를 상태로 커밋 (Konva는 뷰일 뿐) */
-  const handleTransform = useCallback((id: string, reading: NodeTransformReading): void => {
-    const commit = commitTransform(reading)
-    setImages((prev) => prev.map((img) => (img.id === id ? { ...img, ...commit } : img)))
-  }, [])
+  /** 이미지 트랜스폼 확정 — 임시 scale이 확정된 절대 px 치수를 히스토리 커밋 (Konva는 뷰일 뿐) */
+  const handleTransform = useCallback(
+    (id: string, reading: NodeTransformReading): void => {
+      const commit = commitTransform(reading)
+      commitImages((prev) => prev.map((img) => (img.id === id ? { ...img, ...commit } : img)))
+    },
+    [commitImages]
+  )
 
   /** "맞춤" 버튼 — 문서 전체가 화면에 들어오도록 초기화 */
   const handleFit = useCallback((): void => {
@@ -266,10 +340,22 @@ export function ProxyCanvas({ widthPx, heightPx }: ProxyCanvasProps): React.JSX.
           x: cell.x,
           y: cell.y
         }))
-      setImages((prev) => [...prev, ...copies])
+      commitImages((prev) => [...prev, ...copies])
       setGridOpen(false)
     },
-    [selectedItem]
+    [selectedItem, commitImages]
+  )
+
+  /** 화면 채우기(cover/contain) — fitToCanvas 순수 함수 결과를 히스토리 커밋 (undo 가능) */
+  const handleFitMode = useCallback(
+    (mode: FitMode): void => {
+      if (!selectedItem) return
+      const commit = fitToCanvas(selectedItem, widthPx, heightPx, mode)
+      commitImages((prev) =>
+        prev.map((img) => (img.id === selectedItem.id ? { ...img, ...commit } : img))
+      )
+    },
+    [selectedItem, widthPx, heightPx, commitImages]
   )
 
   /** 경로들을 기준점 중심에 캐스케이드 배치해 씬에 추가 */
@@ -297,12 +383,12 @@ export function ProxyCanvas({ widthPx, heightPx }: ProxyCanvasProps): React.JSX.
             rotation: 0
           })
         }
-        setImages((prev) => [...prev, ...placed])
+        commitImages((prev) => [...prev, ...placed])
       } catch (err) {
         alert(`이미지 가져오기 실패: ${err instanceof Error ? err.message : String(err)}`)
       }
     },
-    [view.scale]
+    [view.scale, commitImages]
   )
 
   /** 파일 대화상자 임포트 — 현재 뷰 중심에 배치 */
@@ -422,23 +508,23 @@ export function ProxyCanvas({ widthPx, heightPx }: ProxyCanvasProps): React.JSX.
           {widthPx.toLocaleString()} × {heightPx.toLocaleString()} px
         </span>
         <span style={{ fontWeight: 700 }}>{zoomPercent}%</span>
-        <button onClick={handleImport} style={OVERLAY_BUTTON_STYLE}>
-          가져오기
-        </button>
-        <button
-          onClick={() => setGridOpen(true)}
-          disabled={!selectedItem}
-          style={{
-            ...OVERLAY_BUTTON_STYLE,
-            opacity: selectedItem ? 1 : 0.4,
-            cursor: selectedItem ? 'pointer' : 'not-allowed'
-          }}
-        >
+        <OverlayButton onClick={handleImport}>가져오기</OverlayButton>
+        <OverlayButton onClick={() => setGridOpen(true)} disabled={!selectedItem}>
           그리드 복제
-        </button>
-        <button onClick={handleFit} style={OVERLAY_BUTTON_STYLE}>
-          맞춤
-        </button>
+        </OverlayButton>
+        <OverlayButton onClick={() => handleFitMode('cover')} disabled={!selectedItem}>
+          채우기
+        </OverlayButton>
+        <OverlayButton onClick={() => handleFitMode('contain')} disabled={!selectedItem}>
+          안에 맞춤
+        </OverlayButton>
+        <OverlayButton onClick={undo} disabled={!canUndo}>
+          실행취소
+        </OverlayButton>
+        <OverlayButton onClick={redo} disabled={!canRedo}>
+          다시실행
+        </OverlayButton>
+        <OverlayButton onClick={handleFit}>맞춤</OverlayButton>
       </div>
 
       {gridOpen && selectedItem && (
@@ -464,7 +550,7 @@ export function ProxyCanvas({ widthPx, heightPx }: ProxyCanvasProps): React.JSX.
         }}
       >
         휠: 줌 · Space + 드래그: 팬 · 클릭: 선택 · 드래그: 이동 · 핸들: 크기(Shift: 자유 비율)·회전
-        · Ctrl+D: 복제 · R: 90° 회전 · Del: 삭제 · 이미지 드롭: 배치
+        · Ctrl+D: 복제 · R: 90° 회전 · Del: 삭제 · Ctrl+Z/Y: 실행취소·다시실행 · 이미지 드롭: 배치
       </div>
     </div>
   )
@@ -477,6 +563,33 @@ interface SceneImageProps {
   onSelect: (id: string) => void
   onMove: (id: string, x: number, y: number) => void
   onTransform: (id: string, reading: NodeTransformReading) => void
+}
+
+interface OverlayButtonProps {
+  onClick: () => void
+  disabled?: boolean
+  children: React.ReactNode
+}
+
+/** 오버레이 버튼 — disabled 시 기존 관례(투명도 0.4·not-allowed) 적용 */
+function OverlayButton({
+  onClick,
+  disabled = false,
+  children
+}: OverlayButtonProps): React.JSX.Element {
+  return (
+    <button
+      onClick={onClick}
+      disabled={disabled}
+      style={{
+        ...OVERLAY_BUTTON_STYLE,
+        opacity: disabled ? 0.4 : 1,
+        cursor: disabled ? 'not-allowed' : 'pointer'
+      }}
+    >
+      {children}
+    </button>
+  )
 }
 
 /** 씬 이미지 노드 — 원본 px 크기 그대로 렌더. mousedown으로 즉선택 후 드래그 이동 */
