@@ -1,4 +1,13 @@
 import { useEffect, useRef, useState } from 'react'
+import {
+  CheckCircle2,
+  FileOutput,
+  Image as ImageIcon,
+  Layers,
+  Loader2,
+  TriangleAlert,
+  XCircle
+} from 'lucide-react'
 import type { ExportProgress, ExportResult } from '../../../../types/ipc'
 import {
   buildExportManifest,
@@ -90,72 +99,113 @@ export function ExportDialog({
 
   return (
     <div
-      className="grid-dialog-backdrop"
+      className="fixed inset-0 z-10 flex items-center justify-center bg-zinc-950/70 backdrop-blur-[2px]"
       onMouseDown={rendering ? undefined : onClose}
       role="dialog"
       aria-label="내보내기"
     >
       <form
-        className="grid-dialog export-dialog"
+        className="min-w-[380px] rounded-lg border border-zinc-800 bg-zinc-900 p-4 shadow-2xl"
         onMouseDown={(e) => e.stopPropagation()}
         onSubmit={(e) => {
           e.preventDefault()
           if (phase === 'setup' && items.length > 0) void handleExport()
         }}
       >
-        <h2>내보내기</h2>
+        <div className="mb-3 flex items-center gap-2">
+          <FileOutput size={16} strokeWidth={1.5} className="text-zinc-400" />
+          <h2 className="text-sm font-semibold text-zinc-100">내보내기</h2>
+        </div>
 
         {phase === 'setup' && (
           <>
-            <div className="export-dialog-fields">
-              <label>
+            <div className="grid grid-cols-2 gap-2">
+              <label className="cursor-pointer">
                 <input
                   type="radio"
                   name="export-format"
                   checked={format === 'psd'}
                   onChange={() => setFormat('psd')}
-                />{' '}
-                PSD (CMYK·350DPI)
+                  className="sr-only"
+                />
+                <div
+                  className={`flex flex-col gap-0.5 rounded-md border p-2.5 transition-colors ${
+                    format === 'psd'
+                      ? 'border-indigo-500 bg-indigo-500/15'
+                      : 'border-zinc-800 bg-zinc-950 hover:bg-zinc-800'
+                  }`}
+                >
+                  <span
+                    className={`flex items-center gap-1.5 text-sm font-semibold ${
+                      format === 'psd' ? 'text-indigo-300' : 'text-zinc-200'
+                    }`}
+                  >
+                    <Layers size={14} strokeWidth={1.5} />
+                    PSD
+                  </span>
+                  <span className="text-[10px] text-zinc-500">CMYK · 350 DPI</span>
+                </div>
               </label>
-              <label>
+              <label className="cursor-pointer">
                 <input
                   type="radio"
                   name="export-format"
                   checked={format === 'png'}
                   onChange={() => setFormat('png')}
-                />{' '}
-                PNG (알파 검수용)
+                  className="sr-only"
+                />
+                <div
+                  className={`flex flex-col gap-0.5 rounded-md border p-2.5 transition-colors ${
+                    format === 'png'
+                      ? 'border-indigo-500 bg-indigo-500/15'
+                      : 'border-zinc-800 bg-zinc-950 hover:bg-zinc-800'
+                  }`}
+                >
+                  <span
+                    className={`flex items-center gap-1.5 text-sm font-semibold ${
+                      format === 'png' ? 'text-indigo-300' : 'text-zinc-200'
+                    }`}
+                  >
+                    <ImageIcon size={14} strokeWidth={1.5} />
+                    PNG
+                  </span>
+                  <span className="text-[10px] text-zinc-500">알파 검수용</span>
+                </div>
               </label>
             </div>
             {format === 'psd' && (
-              <label className="export-dialog-flatten">
+              <label className="mt-2.5 flex cursor-pointer items-center gap-2 text-xs text-zinc-300 transition-colors hover:text-zinc-100">
                 <input
                   type="checkbox"
                   checked={flatten}
                   onChange={(e) => setFlatten(e.target.checked)}
-                />{' '}
+                  className="size-3.5 accent-indigo-500"
+                />
                 단일 인쇄 레이어로 병합
               </label>
             )}
-            <p className="grid-dialog-result">
+            <p className="my-3 text-xs tabular-nums text-zinc-400">
               배치 항목 {items.length}개 · 캔버스 {widthPx.toLocaleString()} ×{' '}
               {heightPx.toLocaleString()} px
               {items.length === 0 && (
-                <span className="grid-dialog-warn"> — 배치된 이미지가 없습니다</span>
+                <span className="inline-flex items-center gap-1 font-medium text-red-400">
+                  <TriangleAlert size={12} strokeWidth={1.5} />— 배치된 이미지가 없습니다
+                </span>
               )}
             </p>
           </>
         )}
 
         {rendering && (
-          <div className="export-dialog-progress">
-            <div className="export-dialog-progress-bar">
+          <div className="my-3 flex flex-col gap-2">
+            <div className="h-2 overflow-hidden rounded-full border border-zinc-800 bg-zinc-950">
               <div
-                className="export-dialog-progress-fill"
+                className="h-full bg-indigo-500 transition-all duration-150"
                 style={{ width: `${progress?.stage === 'write' ? 100 : progressPercent}%` }}
               />
             </div>
-            <p className="grid-dialog-result">
+            <p className="flex items-center gap-1.5 text-xs tabular-nums text-zinc-400">
+              <Loader2 size={12} strokeWidth={1.5} className="animate-spin text-indigo-400" />
               {progress?.stage === 'write'
                 ? '파일 저장 중…'
                 : `항목 렌더 ${progress?.current ?? 0} / ${progress?.total ?? items.length}`}
@@ -164,29 +214,48 @@ export function ExportDialog({
         )}
 
         {phase === 'done' && result && (
-          <p className="export-dialog-result">
-            완료 — {result.width_px.toLocaleString()} × {result.height_px.toLocaleString()} px ·
-            레이어 {result.layer_count} · {(result.duration_ms / 1000).toFixed(1)}초
-            <br />
-            <span className="export-dialog-path">{result.output_path}</span>
+          <p className="my-3 flex flex-col gap-1.5 text-xs tabular-nums text-zinc-300">
+            <span className="flex items-center gap-1.5">
+              <CheckCircle2 size={14} strokeWidth={1.5} className="text-emerald-400" />
+              완료 — {result.width_px.toLocaleString()} × {result.height_px.toLocaleString()} px ·
+              레이어 {result.layer_count} · {(result.duration_ms / 1000).toFixed(1)}초
+            </span>
+            <span className="break-all text-[10px] font-normal text-zinc-500">
+              {result.output_path}
+            </span>
           </p>
         )}
 
         {phase === 'error' && error && (
-          <p className="grid-dialog-warn export-dialog-error">{error}</p>
+          <p className="my-3 flex items-start gap-1.5 whitespace-pre-wrap break-all text-xs text-red-400">
+            <XCircle size={14} strokeWidth={1.5} className="mt-0.5 shrink-0" />
+            {error}
+          </p>
         )}
 
-        <div className="grid-dialog-actions">
+        <div className="flex justify-end gap-2">
           {rendering ? (
-            <button type="button" onClick={() => void handleCancel()}>
+            <button
+              type="button"
+              onClick={() => void handleCancel()}
+              className="rounded-md border border-zinc-800 bg-zinc-950 px-3.5 py-1.5 text-xs text-zinc-300 transition-colors hover:bg-zinc-800 active:scale-95"
+            >
               취소
             </button>
           ) : (
             <>
-              <button type="button" onClick={onClose}>
+              <button
+                type="button"
+                onClick={onClose}
+                className="rounded-md border border-zinc-800 bg-zinc-950 px-3.5 py-1.5 text-xs text-zinc-300 transition-colors hover:bg-zinc-800 active:scale-95"
+              >
                 닫기
               </button>
-              <button type="submit" disabled={items.length === 0}>
+              <button
+                type="submit"
+                disabled={items.length === 0}
+                className="rounded-md bg-indigo-600 px-3.5 py-1.5 text-xs font-medium text-white transition-colors hover:bg-indigo-500 active:scale-95 disabled:cursor-not-allowed disabled:opacity-40"
+              >
                 {phase === 'error' ? '다시 시도' : '내보내기'}
               </button>
             </>

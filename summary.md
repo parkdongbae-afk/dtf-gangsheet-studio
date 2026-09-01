@@ -41,9 +41,14 @@
 
 ## 미커밋 UXUI Phase 0~3 작업분 (S7 커밋에서 제외 — 다음 세션 정리)
 - `src/renderer/` 일괄(App.tsx·main.css·ProxyCanvas·ExportDialog·GridDialog·
-  placement.ts·PropertiesPanel.tsx 신규·lib/) · `src/core/math/` · `components/`(목업) ·
+  placement.ts·PropertiesPanel.tsx 신규) · `src/core/math/` ·
   `electron.vite.config.ts`(tailwind) · `.agent/UXUI.md` · `package-lock.json` ·
-  package.json 의존성 hunk(UI 5종) · `tsconfig.web.tsbuildinfo`
+  package.json 의존성 hunk — **clsx·tailwind-merge은 사용처 없는 고아(정리 커밋 시
+  제거 후보)**, lucide-react·tailwindcss·@tailwindcss/vite는 실사용 유지 ·
+  `tsconfig.web.tsbuildinfo`
+- **S7 후속 조치(S7 세션)**: 루트 `components/`(목업 복사본 — lint 에러 6개)와
+  `src/renderer/src/lib/utils.ts`(미사용 고아 cn 헬퍼)는 참조 없음 확인 후 삭제 —
+  lint 0에러·0경고, typecheck 0에러, Vitest 55 재확인.
 
 ## 다음 세션
 - 단계: **S8 — 최종 검증·릴리즈** (PLAN.md 참조) + 선행: UXUI 정리 커밋

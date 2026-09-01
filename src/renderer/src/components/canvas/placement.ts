@@ -170,3 +170,27 @@ export function fitToCanvas(
     rotation: item.rotation
   }
 }
+
+/** 레이어 순서 변경 연산 — 배열 순서 = z순서 (뒤 index가 화면 위) */
+export type LayerOrderOp = 'front' | 'forward' | 'backward' | 'back'
+
+/**
+ * 배열 내 항목 위치 이동 (UXUI Phase 1 속성 패널) — 순수 함수.
+ * 경계(맨 앞/맨 뒤)에서는 원본 배열과 동일한 새 배열을 반환한다.
+ */
+export function reorderItem<T>(items: readonly T[], id: unknown, op: LayerOrderOp): T[] {
+  const index = items.findIndex((item) => item === id || (item as { id?: unknown }).id === id)
+  if (index === -1) return [...items]
+  const target =
+    op === 'front'
+      ? items.length - 1
+      : op === 'forward'
+        ? Math.min(index + 1, items.length - 1)
+        : op === 'backward'
+          ? Math.max(index - 1, 0)
+          : 0
+  const next = [...items]
+  const [moved] = next.splice(index, 1)
+  next.splice(target, 0, moved)
+  return next
+}

@@ -25,8 +25,11 @@
   "dependencies": {
     "@electron-toolkit/preload": "^3.0.2",
     "@electron-toolkit/utils": "^4.0.0",
+    "@tailwindcss/vite": "^4.3.3",
     "konva": "^10.3.2",
-    "react-konva": "^19.2.5"
+    "lucide-react": "^1.39.0",
+    "react-konva": "^19.2.5",
+    "tailwindcss": "^4.3.3"
   },
   "devDependencies": {
     "@electron-toolkit/eslint-config-prettier": "^3.0.0",

@@ -5,7 +5,8 @@ import {
   HEIGHT_PRESETS_M,
   PSD_MAX_PX,
   cmToPx,
-  getCanvasHeightPx
+  getCanvasHeightPx,
+  pxToCm
 } from './index'
 
 describe('cmToPx', () => {
@@ -23,6 +24,20 @@ describe('cmToPx', () => {
 
   it('dpi 생략 시 기본 350 적용', () => {
     expect(cmToPx(2.54)).toBe(350)
+  })
+})
+
+describe('pxToCm', () => {
+  it('350px @ 350dpi → 2.54cm (cmToPx 역변환)', () => {
+    expect(pxToCm(350, 350)).toBeCloseTo(2.54)
+  })
+
+  it('13,780px @ 350dpi → 100cm (1m 문서 높이)', () => {
+    expect(pxToCm(13780)).toBeCloseTo(100)
+  })
+
+  it('0px → 0cm', () => {
+    expect(pxToCm(0)).toBe(0)
   })
 })
 

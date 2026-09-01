@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { Grid3x3, TriangleAlert } from 'lucide-react'
 import { CANVAS_WIDTH_PX, cmToPx } from '../../../../core/math'
 import type { GridSource } from './placement'
 
@@ -24,6 +25,9 @@ const parseGapCm = (text: string): number => {
   if (Number.isNaN(n)) return 1
   return Math.min(Math.max(n, 0), GAP_CM_MAX)
 }
+
+const INPUT_CLASS =
+  'w-full bg-transparent px-2 py-1.5 text-sm tabular-nums text-zinc-200 outline-none [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none'
 
 /** 그리드 복제 대화상자 (S5 세션 2) — 행×열·간격(cm)을 받아 절대 px gap으로 확정 커밋 */
 export function GridDialog({ item, onConfirm, onClose }: GridDialogProps): React.JSX.Element {
@@ -52,9 +56,12 @@ export function GridDialog({ item, onConfirm, onClose }: GridDialogProps): React
   const overRoll = cols * item.widthPx + (cols - 1) * gapPx > CANVAS_WIDTH_PX
 
   return (
-    <div className="grid-dialog-backdrop" onMouseDown={onClose}>
+    <div
+      className="fixed inset-0 z-10 flex items-center justify-center bg-zinc-950/70 backdrop-blur-[2px]"
+      onMouseDown={onClose}
+    >
       <form
-        className="grid-dialog"
+        className="min-w-[340px] rounded-lg border border-zinc-800 bg-zinc-900 p-4 shadow-2xl"
         role="dialog"
         aria-label="그리드 복제"
         onMouseDown={(e) => e.stopPropagation()}
@@ -63,51 +70,85 @@ export function GridDialog({ item, onConfirm, onClose }: GridDialogProps): React
           onConfirm(rows, cols, gapPx)
         }}
       >
-        <h2>그리드 복제</h2>
-        <div className="grid-dialog-fields">
-          <label>
-            행
-            <input
-              type="number"
-              min={1}
-              max={MAX_GRID}
-              value={rowsText}
-              autoFocus
-              onChange={(e) => setRowsText(e.target.value)}
-            />
+        <div className="mb-3 flex items-center gap-2">
+          <Grid3x3 size={16} strokeWidth={1.5} className="text-zinc-400" />
+          <h2 className="text-sm font-semibold text-zinc-100">그리드 복제</h2>
+        </div>
+        <div className="grid grid-cols-3 gap-2">
+          <label className="flex flex-col gap-1">
+            <span className="text-[10px] font-medium uppercase tracking-wide text-zinc-500">
+              행
+            </span>
+            <div className="flex items-center rounded-md border border-zinc-800 bg-zinc-950 transition-all focus-within:ring-1 focus-within:ring-indigo-500">
+              <input
+                type="number"
+                min={1}
+                max={MAX_GRID}
+                value={rowsText}
+                autoFocus
+                onChange={(e) => setRowsText(e.target.value)}
+                className={INPUT_CLASS}
+              />
+              <span className="px-2 text-[10px] text-zinc-500">개</span>
+            </div>
           </label>
-          <label>
-            열
-            <input
-              type="number"
-              min={1}
-              max={MAX_GRID}
-              value={colsText}
-              onChange={(e) => setColsText(e.target.value)}
-            />
+          <label className="flex flex-col gap-1">
+            <span className="text-[10px] font-medium uppercase tracking-wide text-zinc-500">
+              열
+            </span>
+            <div className="flex items-center rounded-md border border-zinc-800 bg-zinc-950 transition-all focus-within:ring-1 focus-within:ring-indigo-500">
+              <input
+                type="number"
+                min={1}
+                max={MAX_GRID}
+                value={colsText}
+                onChange={(e) => setColsText(e.target.value)}
+                className={INPUT_CLASS}
+              />
+              <span className="px-2 text-[10px] text-zinc-500">개</span>
+            </div>
           </label>
-          <label>
-            간격 (cm)
-            <input
-              type="number"
-              min={0}
-              max={GAP_CM_MAX}
-              step={0.1}
-              value={gapText}
-              onChange={(e) => setGapText(e.target.value)}
-            />
+          <label className="flex flex-col gap-1">
+            <span className="text-[10px] font-medium uppercase tracking-wide text-zinc-500">
+              간격
+            </span>
+            <div className="flex items-center rounded-md border border-zinc-800 bg-zinc-950 transition-all focus-within:ring-1 focus-within:ring-indigo-500">
+              <input
+                type="number"
+                min={0}
+                max={GAP_CM_MAX}
+                step={0.1}
+                value={gapText}
+                onChange={(e) => setGapText(e.target.value)}
+                className={INPUT_CLASS}
+              />
+              <span className="px-2 text-[10px] text-zinc-500">cm</span>
+            </div>
           </label>
         </div>
-        <p className="grid-dialog-result">
+        <p className="my-3 text-xs tabular-nums text-zinc-400">
           총 {total}개 (신규 {total - 1}개 복제) · 결과 {extentCm.w.toFixed(1)} ×{' '}
           {extentCm.h.toFixed(1)} cm
-          {overRoll && <span className="grid-dialog-warn"> — 롤 폭 50cm 초과!</span>}
+          {overRoll && (
+            <span className="inline-flex items-center gap-1 font-semibold text-red-400">
+              <TriangleAlert size={12} strokeWidth={1.5} />— 롤 폭 50cm 초과!
+            </span>
+          )}
         </p>
-        <div className="grid-dialog-actions">
-          <button type="button" onClick={onClose}>
+        <div className="flex justify-end gap-2">
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-md border border-zinc-800 bg-zinc-950 px-3.5 py-1.5 text-xs text-zinc-300 transition-colors hover:bg-zinc-800 active:scale-95"
+          >
             취소
           </button>
-          <button type="submit">적용</button>
+          <button
+            type="submit"
+            className="rounded-md bg-indigo-600 px-3.5 py-1.5 text-xs font-medium text-white transition-colors hover:bg-indigo-500 active:scale-95"
+          >
+            적용
+          </button>
         </div>
       </form>
     </div>

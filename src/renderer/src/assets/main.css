@@ -1,7 +1,14 @@
+@import 'tailwindcss';
 @import './base.css';
+
+html {
+  color-scheme: dark;
+}
 
 body {
   margin: 0;
+  background: #09090b; /* zinc-950 */
+  color: #e4e4e7; /* zinc-200 */
   font-family:
     system-ui,
     -apple-system,
@@ -10,182 +17,25 @@ body {
     sans-serif;
 }
 
-.new-doc {
-  max-width: 420px;
-  margin: 3rem auto;
-  padding: 0 1.25rem;
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
 }
 
-.new-doc h1 {
-  font-size: 1.4rem;
+::-webkit-scrollbar-track {
+  background: #09090b; /* zinc-950 */
 }
 
-.new-doc fieldset {
-  border: 1px solid #8888;
-  border-radius: 8px;
-  padding: 0.75rem 1rem;
+::-webkit-scrollbar-thumb {
+  background: #27272a; /* zinc-800 */
+  border-radius: 5px;
+  border: 2px solid #09090b;
 }
 
-.new-doc .field {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 0.5rem 0;
+::-webkit-scrollbar-thumb:hover {
+  background: #3f3f46; /* zinc-700 */
 }
 
-.new-doc .choices {
-  display: flex;
-  gap: 1rem;
-}
-
-.new-doc button {
-  margin-top: 1rem;
-  padding: 0.5rem 1.25rem;
-  font-size: 1rem;
-  cursor: pointer;
-}
-
-.new-doc .result {
-  margin-top: 1rem;
-  font-variant-numeric: tabular-nums;
-  color: #2a6;
-  font-weight: 600;
-}
-
-.grid-dialog-backdrop {
-  position: fixed;
-  inset: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: rgb(15 23 42 / 0.6);
-  z-index: 10;
-}
-
-.grid-dialog {
-  background: #0f172a;
-  color: #e2e8f0;
-  border: 1px solid #475569;
-  border-radius: 8px;
-  padding: 1rem 1.25rem;
-  min-width: 320px;
-  font-size: 13px;
-}
-
-.grid-dialog h2 {
-  margin: 0 0 0.75rem;
-  font-size: 15px;
-}
-
-.grid-dialog-fields {
-  display: flex;
-  gap: 0.75rem;
-}
-
-.grid-dialog-fields label {
-  display: flex;
-  flex-direction: column;
-  gap: 0.25rem;
-  flex: 1;
-}
-
-.grid-dialog-fields input {
-  padding: 4px 8px;
-  font-size: 13px;
-  font-variant-numeric: tabular-nums;
-}
-
-.grid-dialog-result {
-  margin: 0.75rem 0;
-  color: #94a3b8;
-  font-variant-numeric: tabular-nums;
-}
-
-.grid-dialog-warn {
-  color: #f87171;
-  font-weight: 700;
-}
-
-.grid-dialog-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 0.5rem;
-}
-
-.grid-dialog-actions button {
-  padding: 4px 14px;
-  font-size: 13px;
-  cursor: pointer;
-  border: 1px solid #475569;
-  border-radius: 4px;
-  background: #1e293b;
-  color: inherit;
-}
-
-.grid-dialog-actions button[type='submit'] {
-  background: #0ea5e9;
-  border-color: #0ea5e9;
-  color: #0f172a;
-  font-weight: 700;
-}
-
-.grid-dialog-actions button:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
-}
-
-.export-dialog {
-  min-width: 380px;
-}
-
-.export-dialog-fields {
-  display: flex;
-  gap: 1.25rem;
-  margin-bottom: 0.5rem;
-}
-
-.export-dialog-fields label,
-.export-dialog-flatten {
-  display: flex;
-  align-items: center;
-  gap: 0.35rem;
-  cursor: pointer;
-}
-
-.export-dialog-progress {
-  margin: 0.5rem 0 0.25rem;
-}
-
-.export-dialog-progress-bar {
-  height: 8px;
-  border-radius: 4px;
-  background: #1e293b;
-  border: 1px solid #475569;
-  overflow: hidden;
-}
-
-.export-dialog-progress-fill {
-  height: 100%;
-  background: #0ea5e9;
-  transition: width 120ms ease-out;
-}
-
-.export-dialog-result {
-  margin: 0.75rem 0;
-  color: #4ade80;
-  font-weight: 600;
-  font-variant-numeric: tabular-nums;
-  word-break: break-all;
-}
-
-.export-dialog-path {
-  color: #94a3b8;
-  font-weight: 400;
-  font-size: 12px;
-}
-
-.export-dialog-error {
-  white-space: pre-wrap;
-  word-break: break-all;
-  margin: 0.75rem 0;
+::-webkit-scrollbar-corner {
+  background: #09090b;
 }

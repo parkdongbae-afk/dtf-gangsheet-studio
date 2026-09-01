@@ -2,6 +2,16 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type Konva from 'konva'
 import type { Box } from 'konva/lib/shapes/Transformer'
 import { Image, Layer, Rect, Stage, Transformer } from 'react-konva'
+import {
+  Expand,
+  FileOutput,
+  Grid3x3,
+  ImagePlus,
+  Maximize,
+  Redo2,
+  Shrink,
+  Undo2
+} from 'lucide-react'
 import { ExportDialog } from './ExportDialog'
 import { GridDialog } from './GridDialog'
 import {
@@ -11,14 +21,17 @@ import {
   duplicateOffset,
   fitToCanvas,
   normalizeRotation,
+  reorderItem,
   screenToDoc,
   viewCenterDoc,
   type DocPoint,
   type FitMode,
+  type LayerOrderOp,
   type NodeTransformReading,
   type ViewTransform
 } from './placement'
 import { useHtmlImage } from './useHtmlImage'
+import { PropertiesPanel } from '../PropertiesPanel'
 
 /**
  * 프록시 캔버스 뷰포트 (S3) + 씬 이미지 배치·선택·이동·삭제 (S4)·리사이즈/회전/복제/그리드 (S5).
@@ -54,7 +67,7 @@ const ZOOM_SENSITIVITY = 0.0015
 const FIT_PADDING = 24
 /** 문서 배경 Rect 식별명 — 빈 곳 클릭(선택 해제) 판정에 사용 */
 const DOC_BACKGROUND = 'doc-background'
-const SELECTION_STROKE = '#0ea5e9'
+const SELECTION_STROKE = '#6366f1'
 /** 리사이즈 최소 치수 (절대 px) — 반전·음수 치수 방지 (표준 Konva 레시피) */
 const MIN_TRANSFORM_PX = 5
 /** undo 히스토리 상한 (단계) — 초과분은 가장 오래된 스냅샷부터 폐기 */
@@ -62,16 +75,6 @@ const UNDO_LIMIT = 100
 
 const boundMinSize = (oldBox: Box, newBox: Box): Box =>
   newBox.width < MIN_TRANSFORM_PX || newBox.height < MIN_TRANSFORM_PX ? oldBox : newBox
-
-const OVERLAY_BUTTON_STYLE: React.CSSProperties = {
-  padding: '2px 10px',
-  fontSize: 12,
-  cursor: 'pointer',
-  border: '1px solid #475569',
-  borderRadius: 4,
-  background: '#1e293b',
-  color: 'inherit'
-}
 
 const clamp = (value: number, min: number, max: number): number =>
   Math.min(Math.max(value, min), max)
@@ -99,6 +102,8 @@ export function ProxyCanvas({ widthPx, heightPx }: ProxyCanvasProps): React.JSX.
   const stageRef = useRef<Konva.Stage>(null)
   /** 씬 전체에서 유일한 트랜스포머 — 선택 테두리 렌더 (이미지별 트랜스포머 금지) */
   const transformerRef = useRef<Konva.Transformer>(null)
+  /** 속성 패널을 제외한 캔버스 뷰포트 영역 — Stage 크기·드롭 좌표의 기준 */
+  const viewportRef = useRef<HTMLDivElement>(null)
   /** 사용자가 줌/팬을 한 번이라도 조작했는가 — 조작 전엔 리사이즈 시 자동 refit */
   const interactedRef = useRef(false)
 
@@ -168,16 +173,20 @@ export function ProxyCanvas({ widthPx, heightPx }: ProxyCanvasProps): React.JSX.
   const canUndo = past.length > 0
   const canRedo = future.length > 0
 
-  /** 뷰포트(창) 리사이즈 추적 — 조작 이력 없으면 문서를 다시 맞춤 */
+  /** 뷰포트(패널 제외 캔버스 영역) 크기 추적 — 조작 이력 없으면 문서를 다시 맞춤 */
   useEffect(() => {
-    const onResize = (): void => {
-      const w = window.innerWidth
-      const h = window.innerHeight
+    const el = viewportRef.current
+    if (!el) return
+    const measure = (): void => {
+      const w = el.clientWidth
+      const h = el.clientHeight
       setSize({ w, h })
       if (!interactedRef.current) setView(fitView(widthPx, heightPx, w, h))
     }
-    window.addEventListener('resize', onResize)
-    return () => window.removeEventListener('resize', onResize)
+    measure()
+    const observer = new ResizeObserver(measure)
+    observer.observe(el)
+    return () => observer.disconnect()
   }, [widthPx, heightPx])
 
   /** 스페이스 홀드 = 팬 모드 (커서 grab + Stage 드래그 활성) — 텍스트 입력·모달 중 무시 */
@@ -360,6 +369,39 @@ export function ProxyCanvas({ widthPx, heightPx }: ProxyCanvasProps): React.JSX.
     [selectedItem, widthPx, heightPx, commitImages]
   )
 
+  /** 속성 패널 — 선택 항목 수치 편집 커밋 (cm→px 변환은 패널 담당, 여기선 절대 px만) */
+  const handleUpdateSelected = useCallback(
+    (patch: Partial<PlacedImage>): void => {
+      if (!selectedId) return
+      commitImages((prev) =>
+        prev.map((img) => (img.id === selectedId ? { ...img, ...patch } : img))
+      )
+    },
+    [selectedId, commitImages]
+  )
+
+  /** 속성 패널 90° 회전 버튼 — R 단축키와 동일 규칙 */
+  const handleRotate90 = useCallback((): void => {
+    if (!selectedId) return
+    commitImages((prev) =>
+      prev.map((img) =>
+        img.id === selectedId ? { ...img, rotation: normalizeRotation(img.rotation + 90) } : img
+      )
+    )
+  }, [selectedId, commitImages])
+
+  /** 속성 패널 레이어 순서 — 배열 순서 = z순서 (뒤 index가 화면 위).
+   *  경계 no-op(이미 맨 앞/맨 뒤)는 커밋하지 않아 빈 undo 단계를 만들지 않는다. */
+  const handleOrder = useCallback(
+    (op: LayerOrderOp): void => {
+      if (!selectedId) return
+      const next = reorderItem(images, selectedId, op)
+      if (next.every((img, i) => img === images[i])) return
+      commitImages(() => next)
+    },
+    [images, selectedId, commitImages]
+  )
+
   /** 경로들을 기준점 중심에 캐스케이드 배치해 씬에 추가 */
   const importPaths = useCallback(
     async (paths: string[], center: DocPoint): Promise<void> => {
@@ -401,10 +443,11 @@ export function ProxyCanvas({ widthPx, heightPx }: ProxyCanvasProps): React.JSX.
     })
   }, [importPaths, view, size])
 
-  /** 드래그앤드롭 — 드롭 지점(문서 좌표)을 기준점으로 배치 */
+  /** 드래그앤드롭 — 드롭 지점(뷰포트 기준 → 문서 좌표)을 기준점으로 배치 */
   const handleDrop = useCallback(
     (e: React.DragEvent): void => {
       e.preventDefault()
+      const rect = e.currentTarget.getBoundingClientRect()
       const paths = Array.from(e.dataTransfer.files).flatMap((file) => {
         try {
           const p = window.api.getPathForFile(file)
@@ -414,158 +457,179 @@ export function ProxyCanvas({ widthPx, heightPx }: ProxyCanvasProps): React.JSX.
         }
       })
       if (paths.length === 0) return
-      void importPaths(paths, screenToDoc(view, e.clientX, e.clientY))
+      void importPaths(paths, screenToDoc(view, e.clientX - rect.left, e.clientY - rect.top))
     },
     [importPaths, view]
   )
 
   const zoomPercent = Math.round(view.scale * 100)
+  const selectedIndex = selectedId ? images.findIndex((img) => img.id === selectedId) : -1
 
   return (
     <div
-      style={{
-        position: 'fixed',
-        inset: 0,
-        background: '#1e293b',
-        overflow: 'hidden',
-        cursor: spaceDown ? 'grab' : 'default'
-      }}
-      onDragOver={(e) => e.preventDefault()}
-      onDrop={handleDrop}
+      className="fixed inset-0 flex overflow-hidden bg-zinc-950"
+      style={{ cursor: spaceDown ? 'grab' : 'default' }}
     >
-      <Stage
-        ref={stageRef}
-        width={size.w}
-        height={size.h}
-        scaleX={view.scale}
-        scaleY={view.scale}
-        x={view.x}
-        y={view.y}
-        draggable={spaceDown}
-        onWheel={handleWheel}
-        onDragEnd={handleDragEnd}
-        onMouseDown={handleStageMouseDown}
+      <div
+        ref={viewportRef}
+        className="relative min-w-0 flex-1"
+        onDragOver={(e) => e.preventDefault()}
+        onDrop={handleDrop}
       >
-        <Layer>
-          {/* 가상 문서 — 실규격 350 DPI 좌표계의 흰색 Rect (테두리는 화면 2px 유지) */}
-          <Rect
-            name={DOC_BACKGROUND}
-            x={0}
-            y={0}
-            width={widthPx}
-            height={heightPx}
-            fill="#ffffff"
-            stroke="#64748b"
-            strokeWidth={2 / view.scale}
-            perfectDrawEnabled={false}
-          />
-        </Layer>
-        <Layer>
-          {images.map((placed) => (
-            <SceneImage
-              key={placed.id}
-              placed={placed}
-              draggable={!spaceDown}
-              onSelect={handleSelect}
-              onMove={handleMove}
-              onTransform={handleTransform}
+        <Stage
+          ref={stageRef}
+          width={size.w}
+          height={size.h}
+          scaleX={view.scale}
+          scaleY={view.scale}
+          x={view.x}
+          y={view.y}
+          draggable={spaceDown}
+          onWheel={handleWheel}
+          onDragEnd={handleDragEnd}
+          onMouseDown={handleStageMouseDown}
+        >
+          <Layer>
+            {/* 가상 문서 — 실규격 350 DPI 좌표계의 흰색 Rect (테두리는 화면 2px 유지) */}
+            <Rect
+              name={DOC_BACKGROUND}
+              x={0}
+              y={0}
+              width={widthPx}
+              height={heightPx}
+              fill="#ffffff"
+              stroke="#52525b"
+              strokeWidth={2 / view.scale}
+              perfectDrawEnabled={false}
             />
-          ))}
-          {/* 씬 전체 유일 트랜스포머 — 모서리 4핸들(비율 유지 기본, Shift=자유 비율) + 회전 앵커.
+          </Layer>
+          <Layer>
+            {images.map((placed) => (
+              <SceneImage
+                key={placed.id}
+                placed={placed}
+                draggable={!spaceDown}
+                onSelect={handleSelect}
+                onMove={handleMove}
+                onTransform={handleTransform}
+              />
+            ))}
+            {/* 씬 전체 유일 트랜스포머 — 모서리 4핸들(비율 유지 기본, Shift=자유 비율) + 회전 앵커.
               트랜스포머는 절대(화면) 좌표계로 렌더 — 앵커·스트로크는 줌 배율과 무관하게 화면 px */}
-          <Transformer
-            ref={transformerRef}
-            resizeEnabled
-            rotateEnabled
-            keepRatio
-            shiftBehavior="inverted"
-            enabledAnchors={['top-left', 'top-right', 'bottom-left', 'bottom-right']}
-            boundBoxFunc={boundMinSize}
-            borderStroke={SELECTION_STROKE}
-            borderStrokeWidth={2}
-            anchorStroke={SELECTION_STROKE}
+            <Transformer
+              ref={transformerRef}
+              resizeEnabled
+              rotateEnabled
+              keepRatio
+              shiftBehavior="inverted"
+              enabledAnchors={['top-left', 'top-right', 'bottom-left', 'bottom-right']}
+              boundBoxFunc={boundMinSize}
+              borderStroke={SELECTION_STROKE}
+              borderStrokeWidth={2}
+              anchorStroke={SELECTION_STROKE}
+            />
+          </Layer>
+        </Stage>
+
+        {/* 상태 오버레이: 문서 치수 · 현재 배율 · 툴바 */}
+        <div className="absolute right-3 top-3 flex select-none items-center gap-2">
+          <div className="flex items-center gap-2 rounded-md border border-zinc-800 bg-zinc-900 px-2.5 py-1 text-[11px] tabular-nums text-zinc-400">
+            <span>
+              {widthPx.toLocaleString()} × {heightPx.toLocaleString()} px
+            </span>
+            <span className="font-semibold text-zinc-200">{zoomPercent}%</span>
+          </div>
+          <div className="flex items-center gap-1 rounded-lg border border-zinc-800 bg-zinc-900/95 p-1 shadow-2xl backdrop-blur">
+            <OverlayButton onClick={handleImport} title="이미지 가져오기">
+              <ImagePlus size={14} strokeWidth={1.5} />
+              가져오기
+            </OverlayButton>
+            <div className="mx-0.5 h-5 w-px bg-zinc-800" />
+            <OverlayButton
+              onClick={() => setGridOpen(true)}
+              disabled={!selectedItem}
+              title="그리드 복제"
+            >
+              <Grid3x3 size={14} strokeWidth={1.5} />
+              그리드 복제
+            </OverlayButton>
+            <OverlayButton
+              onClick={() => handleFitMode('cover')}
+              disabled={!selectedItem}
+              title="화면 채우기 (cover)"
+            >
+              <Expand size={14} strokeWidth={1.5} />
+              채우기
+            </OverlayButton>
+            <OverlayButton
+              onClick={() => handleFitMode('contain')}
+              disabled={!selectedItem}
+              title="안에 맞춤 (contain)"
+            >
+              <Shrink size={14} strokeWidth={1.5} />
+              안에 맞춤
+            </OverlayButton>
+            <div className="mx-0.5 h-5 w-px bg-zinc-800" />
+            <OverlayButton onClick={undo} disabled={!canUndo} title="실행취소 (Ctrl+Z)">
+              <Undo2 size={14} strokeWidth={1.5} />
+              실행취소
+            </OverlayButton>
+            <OverlayButton onClick={redo} disabled={!canRedo} title="다시실행 (Ctrl+Shift+Z)">
+              <Redo2 size={14} strokeWidth={1.5} />
+              다시실행
+            </OverlayButton>
+            <div className="mx-0.5 h-5 w-px bg-zinc-800" />
+            <OverlayButton onClick={handleFit} title="문서 전체 화면 맞춤">
+              <Maximize size={14} strokeWidth={1.5} />
+              맞춤
+            </OverlayButton>
+            <div className="mx-0.5 h-5 w-px bg-zinc-800" />
+            <OverlayButton
+              onClick={() => setExportOpen(true)}
+              disabled={images.length === 0}
+              title="내보내기 (PSD·PNG)"
+              primary
+            >
+              <FileOutput size={14} strokeWidth={1.5} />
+              내보내기
+            </OverlayButton>
+          </div>
+        </div>
+
+        {gridOpen && selectedItem && (
+          <GridDialog
+            item={selectedItem}
+            onConfirm={handleGridConfirm}
+            onClose={() => setGridOpen(false)}
           />
-        </Layer>
-      </Stage>
+        )}
 
-      {/* 상태 오버레이: 문서 치수 · 현재 배율 · 맞춤 버튼 */}
-      <div
-        style={{
-          position: 'absolute',
-          top: 12,
-          right: 12,
-          display: 'flex',
-          alignItems: 'center',
-          gap: 12,
-          padding: '6px 12px',
-          borderRadius: 6,
-          background: '#0f172a',
-          color: '#e2e8f0',
-          fontSize: 13,
-          fontVariantNumeric: 'tabular-nums',
-          userSelect: 'none'
-        }}
-      >
-        <span>
-          {widthPx.toLocaleString()} × {heightPx.toLocaleString()} px
-        </span>
-        <span style={{ fontWeight: 700 }}>{zoomPercent}%</span>
-        <OverlayButton onClick={handleImport}>가져오기</OverlayButton>
-        <OverlayButton onClick={() => setGridOpen(true)} disabled={!selectedItem}>
-          그리드 복제
-        </OverlayButton>
-        <OverlayButton onClick={() => handleFitMode('cover')} disabled={!selectedItem}>
-          채우기
-        </OverlayButton>
-        <OverlayButton onClick={() => handleFitMode('contain')} disabled={!selectedItem}>
-          안에 맞춤
-        </OverlayButton>
-        <OverlayButton onClick={undo} disabled={!canUndo}>
-          실행취소
-        </OverlayButton>
-        <OverlayButton onClick={redo} disabled={!canRedo}>
-          다시실행
-        </OverlayButton>
-        <OverlayButton onClick={handleFit}>맞춤</OverlayButton>
-        <OverlayButton onClick={() => setExportOpen(true)} disabled={images.length === 0}>
-          내보내기
-        </OverlayButton>
+        {exportOpen && (
+          <ExportDialog
+            items={images}
+            widthPx={widthPx}
+            heightPx={heightPx}
+            onClose={() => setExportOpen(false)}
+          />
+        )}
+
+        {/* 조작 힌트 */}
+        <div className="absolute bottom-3 left-3 select-none rounded-md border border-zinc-800 bg-zinc-900/95 px-3 py-1.5 text-[11px] text-zinc-500 backdrop-blur">
+          휠: 줌 · Space + 드래그: 팬 · 클릭: 선택 · 드래그: 이동 · 핸들: 크기(Shift: 자유
+          비율)·회전 · Ctrl+D: 복제 · R: 90° 회전 · Del: 삭제 · Ctrl+Z/Y: 실행취소·다시실행 · 이미지
+          드롭: 배치
+        </div>
       </div>
 
-      {gridOpen && selectedItem && (
-        <GridDialog
-          item={selectedItem}
-          onConfirm={handleGridConfirm}
-          onClose={() => setGridOpen(false)}
-        />
-      )}
-
-      {exportOpen && (
-        <ExportDialog
-          items={images}
-          widthPx={widthPx}
-          heightPx={heightPx}
-          onClose={() => setExportOpen(false)}
-        />
-      )}
-
-      {/* 조작 힌트 */}
-      <div
-        style={{
-          position: 'absolute',
-          bottom: 12,
-          left: 12,
-          padding: '4px 10px',
-          borderRadius: 6,
-          background: '#0f172a',
-          color: '#94a3b8',
-          fontSize: 12,
-          userSelect: 'none'
-        }}
-      >
-        휠: 줌 · Space + 드래그: 팬 · 클릭: 선택 · 드래그: 이동 · 핸들: 크기(Shift: 자유 비율)·회전
-        · Ctrl+D: 복제 · R: 90° 회전 · Del: 삭제 · Ctrl+Z/Y: 실행취소·다시실행 · 이미지 드롭: 배치
-      </div>
+      <PropertiesPanel
+        item={selectedItem}
+        itemCount={images.length}
+        selectedIndex={selectedIndex >= 0 ? selectedIndex : null}
+        onUpdate={handleUpdateSelected}
+        onRotate90={handleRotate90}
+        onOrder={handleOrder}
+        onOpenGrid={() => setGridOpen(true)}
+      />
     </div>
   )
 }
@@ -582,24 +646,31 @@ interface SceneImageProps {
 interface OverlayButtonProps {
   onClick: () => void
   disabled?: boolean
+  title?: string
+  primary?: boolean
   children: React.ReactNode
 }
 
-/** 오버레이 버튼 — disabled 시 기존 관례(투명도 0.4·not-allowed) 적용 */
+/** 오버레이 버튼 — disabled 시 기존 관례(투명도 0.4·포인터 차단) 적용 */
 function OverlayButton({
   onClick,
   disabled = false,
+  title,
+  primary = false,
   children
 }: OverlayButtonProps): React.JSX.Element {
   return (
     <button
+      type="button"
       onClick={onClick}
       disabled={disabled}
-      style={{
-        ...OVERLAY_BUTTON_STYLE,
-        opacity: disabled ? 0.4 : 1,
-        cursor: disabled ? 'not-allowed' : 'pointer'
-      }}
+      title={title}
+      aria-label={title}
+      className={`flex h-8 items-center gap-1.5 rounded-md px-2.5 text-xs transition-colors active:scale-95 disabled:pointer-events-none disabled:opacity-40 ${
+        primary
+          ? 'border border-indigo-500 bg-indigo-600 font-medium text-white hover:bg-indigo-500'
+          : 'text-zinc-300 hover:bg-zinc-800 hover:text-zinc-100'
+      }`}
     >
       {children}
     </button>

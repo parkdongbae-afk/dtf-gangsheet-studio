@@ -5,6 +5,7 @@
 node_modules/
 .eslintcache
 .playwright-mcp/
+*.tsbuildinfo
 
 # 빌드 산출물 (electron-vite out/ · electron-builder release/ · PyInstaller export-sidecar/dist)
 out/

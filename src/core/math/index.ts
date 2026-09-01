@@ -22,6 +22,11 @@ export function cmToPx(cm: number, dpi: number = 350): number {
   return Math.round((cm / 2.54) * dpi)
 }
 
+/** px → cm 환산 (표시 전용 — 내부 데이터는 항상 px). */
+export function pxToCm(px: number, dpi: number = 350): number {
+  return (px / dpi) * 2.54
+}
+
 /** PSD 치수 한계 초과 오류 — 2m 단위 분할 안내 (CLAUDE.md §1-3) */
 export class CanvasSizeLimitError extends Error {
   readonly requestedPx: number

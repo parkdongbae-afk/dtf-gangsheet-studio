@@ -6,6 +6,7 @@ import {
   duplicateOffset,
   fitToCanvas,
   normalizeRotation,
+  reorderItem,
   screenToDoc,
   viewCenterDoc,
   type FitSource,
@@ -272,5 +273,45 @@ describe('fitToCanvas', () => {
     const b: FitSource = { x: -98765, y: 4321, widthPx: 600, heightPx: 400, rotation: 33 }
     expect(fitToCanvas(a, DOC_W, DOC_H, 'cover')).toEqual(fitToCanvas(b, DOC_W, DOC_H, 'cover'))
     expect(fitToCanvas(a, DOC_W, DOC_H, 'contain')).toEqual(fitToCanvas(b, DOC_W, DOC_H, 'contain'))
+  })
+})
+
+describe('reorderItem — 레이어 순서 (배열 순서 = z순서)', () => {
+  const ids = (items: { id: string }[]): string[] => items.map((i) => i.id)
+  const items = [{ id: 'a' }, { id: 'b' }, { id: 'c' }, { id: 'd' }]
+
+  it('front — 맨 뒤(화면 최상단)로 이동', () => {
+    expect(ids(reorderItem(items, 'a', 'front'))).toEqual(['b', 'c', 'd', 'a'])
+  })
+
+  it('back — 맨 앞(화면 최하단)으로 이동', () => {
+    expect(ids(reorderItem(items, 'd', 'back'))).toEqual(['d', 'a', 'b', 'c'])
+  })
+
+  it('forward — 한 칸 뒤로', () => {
+    expect(ids(reorderItem(items, 'b', 'forward'))).toEqual(['a', 'c', 'b', 'd'])
+  })
+
+  it('backward — 한 칸 앞으로', () => {
+    expect(ids(reorderItem(items, 'c', 'backward'))).toEqual(['a', 'c', 'b', 'd'])
+  })
+
+  it('경계에서는 순서 불변 — 맨 뒤 forward·맨 앞 backward', () => {
+    expect(ids(reorderItem(items, 'd', 'forward'))).toEqual(['a', 'b', 'c', 'd'])
+    expect(ids(reorderItem(items, 'a', 'backward'))).toEqual(['a', 'b', 'c', 'd'])
+    expect(ids(reorderItem(items, 'a', 'back'))).toEqual(['a', 'b', 'c', 'd'])
+    expect(ids(reorderItem(items, 'd', 'front'))).toEqual(['a', 'b', 'c', 'd'])
+  })
+
+  it('원본 배열은 불변 (새 배열 반환)', () => {
+    const before = [...items]
+    reorderItem(items, 'b', 'front')
+    expect(items).toEqual(before)
+  })
+
+  it('미포함 id — 원본과 동일한 내용의 새 배열', () => {
+    const result = reorderItem(items, 'zzz', 'front')
+    expect(result).toEqual(items)
+    expect(result).not.toBe(items)
   })
 })
