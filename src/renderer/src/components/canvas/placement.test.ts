@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import { centeredTopLeft, screenToDoc, viewCenterDoc, type ViewTransform } from './placement'
+import {
+  centeredTopLeft,
+  commitTransform,
+  normalizeRotation,
+  screenToDoc,
+  viewCenterDoc,
+  type ViewTransform
+} from './placement'
 
 const identity: ViewTransform = { scale: 1, x: 0, y: 0 }
 
@@ -41,5 +48,55 @@ describe('centeredTopLeft', () => {
     const p = centeredTopLeft(10, 10, { x: 0, y: 0 }, 0, 8)
     const q = centeredTopLeft(10, 10, { x: 0, y: 0 }, 1, 8)
     expect(q.x - p.x).toBeCloseTo(3) // 24 ÷ 8
+  })
+})
+
+describe('normalizeRotation', () => {
+  it('90° 단위 래핑 — 항상 (-180, 180]', () => {
+    expect(normalizeRotation(0)).toBe(0)
+    expect(normalizeRotation(90)).toBe(90)
+    expect(normalizeRotation(180)).toBe(180)
+    expect(normalizeRotation(270)).toBe(-90)
+    expect(normalizeRotation(360)).toBe(0)
+    expect(normalizeRotation(-90)).toBe(-90)
+    expect(normalizeRotation(-180)).toBe(180)
+    expect(normalizeRotation(-270)).toBe(90)
+  })
+
+  it('1° 단위·다중 회전 래핑', () => {
+    expect(normalizeRotation(181)).toBe(-179)
+    expect(normalizeRotation(-181)).toBe(179)
+    expect(normalizeRotation(725)).toBe(5)
+    expect(normalizeRotation(-725)).toBe(-5)
+  })
+})
+
+describe('commitTransform', () => {
+  it('임시 scale을 절대 px 치수로 확정 — 등비(keepRatio) 리사이즈', () => {
+    expect(
+      commitTransform({
+        x: 100,
+        y: 200,
+        rotation: 0,
+        width: 600,
+        height: 400,
+        scaleX: 1.5,
+        scaleY: 1.5
+      })
+    ).toEqual({ x: 100, y: 200, widthPx: 900, heightPx: 600, rotation: 0 })
+  })
+
+  it('축 비대칭(자유 비율) 리사이즈 + 회전각 정규화 동시 처리', () => {
+    expect(
+      commitTransform({
+        x: -10,
+        y: 0,
+        rotation: 275,
+        width: 100,
+        height: 50,
+        scaleX: 0.5,
+        scaleY: 2
+      })
+    ).toEqual({ x: -10, y: 0, widthPx: 50, heightPx: 100, rotation: -85 })
   })
 })

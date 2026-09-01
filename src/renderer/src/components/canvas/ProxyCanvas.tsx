@@ -1,17 +1,21 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type Konva from 'konva'
+import type { Box } from 'konva/lib/shapes/Transformer'
 import { Image, Layer, Rect, Stage, Transformer } from 'react-konva'
 import {
   centeredTopLeft,
+  commitTransform,
+  normalizeRotation,
   screenToDoc,
   viewCenterDoc,
   type DocPoint,
+  type NodeTransformReading,
   type ViewTransform
 } from './placement'
 import { useHtmlImage } from './useHtmlImage'
 
 /**
- * 프록시 캔버스 뷰포트 (S3) + 씬 이미지 배치·선택·이동·삭제 (S4).
+ * 프록시 캔버스 뷰포트 (S3) + 씬 이미지 배치·선택·이동·삭제 (S4)·리사이즈/회전 (S5).
  *
  * - Stage 크기 = 브라우저 창(뷰포트) 고정 — 실제 6,890×N px 메모리의 Stage를 만들지 않는다.
  * - 문서는 가상 좌표계(350 DPI 절대 px)의 흰색 Rect + 이미지 노드로 표현 (CLAUDE.md §1:
@@ -31,6 +35,8 @@ export interface PlacedImage {
   heightPx: number
   x: number
   y: number
+  /** 노드 중심 회전각 (도, -180 < r ≤ 180) — Konva rotation과 동일 단위 */
+  rotation: number
 }
 
 /** 줌 클램프 (화면 배율 기준) */
@@ -43,6 +49,11 @@ const FIT_PADDING = 24
 /** 문서 배경 Rect 식별명 — 빈 곳 클릭(선택 해제) 판정에 사용 */
 const DOC_BACKGROUND = 'doc-background'
 const SELECTION_STROKE = '#0ea5e9'
+/** 리사이즈 최소 치수 (절대 px) — 반전·음수 치수 방지 (표준 Konva 레시피) */
+const MIN_TRANSFORM_PX = 5
+
+const boundMinSize = (oldBox: Box, newBox: Box): Box =>
+  newBox.width < MIN_TRANSFORM_PX || newBox.height < MIN_TRANSFORM_PX ? oldBox : newBox
 
 const OVERLAY_BUTTON_STYLE: React.CSSProperties = {
   padding: '2px 10px',
@@ -119,14 +130,24 @@ export function ProxyCanvas({ widthPx, heightPx }: ProxyCanvasProps): React.JSX.
     }
   }, [])
 
-  /** Del/Backspace = 선택 이미지 삭제 (현재 UI에 텍스트 인풋 없음 — 도입 시 재검토) */
+  /** Del/Backspace = 삭제, R = 90° 회전 (현재 UI에 텍스트 인풋 없음 — 도입 시 재검토) */
   useEffect(() => {
     if (!selectedId) return
     const onKeyDown = (e: KeyboardEvent): void => {
-      if (e.key !== 'Delete' && e.key !== 'Backspace') return
-      e.preventDefault()
-      setImages((prev) => prev.filter((img) => img.id !== selectedId))
-      setSelectedId(null)
+      if (e.key === 'Delete' || e.key === 'Backspace') {
+        e.preventDefault()
+        setImages((prev) => prev.filter((img) => img.id !== selectedId))
+        setSelectedId(null)
+        return
+      }
+      if ((e.key === 'r' || e.key === 'R') && !e.repeat) {
+        e.preventDefault()
+        setImages((prev) =>
+          prev.map((img) =>
+            img.id === selectedId ? { ...img, rotation: normalizeRotation(img.rotation + 90) } : img
+          )
+        )
+      }
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
@@ -187,6 +208,12 @@ export function ProxyCanvas({ widthPx, heightPx }: ProxyCanvasProps): React.JSX.
     setImages((prev) => prev.map((img) => (img.id === id ? { ...img, x, y } : img)))
   }, [])
 
+  /** 이미지 트랜스폼 확정 — 임시 scale이 확정된 절대 px 치수를 상태로 커밋 (Konva는 뷰일 뿐) */
+  const handleTransform = useCallback((id: string, reading: NodeTransformReading): void => {
+    const commit = commitTransform(reading)
+    setImages((prev) => prev.map((img) => (img.id === id ? { ...img, ...commit } : img)))
+  }, [])
+
   /** "맞춤" 버튼 — 문서 전체가 화면에 들어오도록 초기화 */
   const handleFit = useCallback((): void => {
     interactedRef.current = false
@@ -214,7 +241,8 @@ export function ProxyCanvas({ widthPx, heightPx }: ProxyCanvasProps): React.JSX.
             widthPx: imported.widthPx,
             heightPx: imported.heightPx,
             x: topLeft.x,
-            y: topLeft.y
+            y: topLeft.y,
+            rotation: 0
           })
         }
         setImages((prev) => [...prev, ...placed])
@@ -300,15 +328,22 @@ export function ProxyCanvas({ widthPx, heightPx }: ProxyCanvasProps): React.JSX.
               draggable={!spaceDown}
               onSelect={handleSelect}
               onMove={handleMove}
+              onTransform={handleTransform}
             />
           ))}
-          {/* 선택 테두리 전용 트랜스포머 — 핸들·회전은 S5에서 활성화 */}
+          {/* 씬 전체 유일 트랜스포머 — 모서리 4핸들(비율 유지 기본, Shift=자유 비율) + 회전 앵커.
+              트랜스포머는 절대(화면) 좌표계로 렌더 — 앵커·스트로크는 줌 배율과 무관하게 화면 px */}
           <Transformer
             ref={transformerRef}
-            resizeEnabled={false}
-            rotateEnabled={false}
+            resizeEnabled
+            rotateEnabled
+            keepRatio
+            shiftBehavior="inverted"
+            enabledAnchors={['top-left', 'top-right', 'bottom-left', 'bottom-right']}
+            boundBoxFunc={boundMinSize}
             borderStroke={SELECTION_STROKE}
             borderStrokeWidth={2}
+            anchorStroke={SELECTION_STROKE}
           />
         </Layer>
       </Stage>
@@ -357,7 +392,8 @@ export function ProxyCanvas({ widthPx, heightPx }: ProxyCanvasProps): React.JSX.
           userSelect: 'none'
         }}
       >
-        휠: 줌 · Space + 드래그: 팬 · 클릭: 선택 · 드래그: 이동 · Del: 삭제 · 이미지 드롭: 배치
+        휠: 줌 · Space + 드래그: 팬 · 클릭: 선택 · 드래그: 이동 · 핸들: 크기(Shift: 자유 비율)·회전
+        · R: 90° 회전 · Del: 삭제 · 이미지 드롭: 배치
       </div>
     </div>
   )
@@ -369,6 +405,7 @@ interface SceneImageProps {
   draggable: boolean
   onSelect: (id: string) => void
   onMove: (id: string, x: number, y: number) => void
+  onTransform: (id: string, reading: NodeTransformReading) => void
 }
 
 /** 씬 이미지 노드 — 원본 px 크기 그대로 렌더. mousedown으로 즉선택 후 드래그 이동 */
@@ -376,7 +413,8 @@ function SceneImage({
   placed,
   draggable,
   onSelect,
-  onMove
+  onMove,
+  onTransform
 }: SceneImageProps): React.JSX.Element | null {
   const el = useHtmlImage(placed.dataUrl)
   if (!el) return null
@@ -385,12 +423,31 @@ function SceneImage({
       id={placed.id}
       x={placed.x}
       y={placed.y}
+      rotation={placed.rotation}
       width={placed.widthPx}
       height={placed.heightPx}
       image={el}
       draggable={draggable}
       onMouseDown={() => onSelect(placed.id)}
       onDragEnd={(e) => onMove(placed.id, e.currentTarget.x(), e.currentTarget.y())}
+      onTransformEnd={(e) => {
+        // 트랜스포머는 리사이즈를 임시 scaleX/scaleY로 적용한다. 판독 직후 노드에 1로 리셋 —
+        // react-konva는 prop으로 전달하지 않은 scale을 다음 렌더에서 되돌리지 않는다 (Konva 공식 패턴)
+        const node = e.currentTarget
+        const scaleX = node.scaleX()
+        const scaleY = node.scaleY()
+        node.scaleX(1)
+        node.scaleY(1)
+        onTransform(placed.id, {
+          x: node.x(),
+          y: node.y(),
+          rotation: node.rotation(),
+          width: node.width(),
+          height: node.height(),
+          scaleX,
+          scaleY
+        })
+      }}
       perfectDrawEnabled={false}
     />
   )
