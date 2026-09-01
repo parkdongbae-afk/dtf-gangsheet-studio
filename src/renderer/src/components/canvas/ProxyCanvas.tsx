@@ -1,19 +1,34 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type Konva from 'konva'
-import { Layer, Rect, Stage } from 'react-konva'
+import { Image, Layer, Rect, Stage } from 'react-konva'
+import {
+  centeredTopLeft,
+  screenToDoc,
+  viewCenterDoc,
+  type DocPoint,
+  type ViewTransform
+} from './placement'
+import { useHtmlImage } from './useHtmlImage'
 
 /**
- * 프록시 캔버스 뷰포트 (S3).
+ * 프록시 캔버스 뷰포트 (S3) + 씬 이미지 배치 (S4).
  *
  * - Stage 크기 = 브라우저 창(뷰포트) 고정 — 실제 6,890×N px 메모리의 Stage를 만들지 않는다.
- * - 문서는 가상 좌표계(350 DPI 절대 px)의 흰색 Rect 하나로 표현 (CLAUDE.md §1:
+ * - 문서는 가상 좌표계(350 DPI 절대 px)의 흰색 Rect + 이미지 노드로 표현 (CLAUDE.md §1:
  *   내부 데이터는 항상 절대 픽셀, 스케일은 뷰 변환에서만 처리).
  * - 줌/팬은 stage.scale()/stage.position() 내장 속성만 조작 (객체 좌표 직접 연산 금지).
+ * - 이미지 노드는 원본 px 크기 그대로 렌더 — ≤2,048px 프리뷰 dataURL은 화면 표시 소스일 뿐.
  */
 
-/** 뷰 변환 상태 — stage.scale()/position() 에 대응하는 값만 다룬다 */
-interface ViewTransform {
-  scale: number
+/** 씬에 배치된 이미지 — 좌표·크기는 전부 350 DPI 절대 px (음수 = 캔버스 밖 허용) */
+export interface PlacedImage {
+  id: string
+  /** 원본 파일 절대 경로 — S6 내보내기(풀해상도 렌더)에서 사용 */
+  filePath: string
+  /** ≤2,048px PNG 프리뷰 dataURL — 표시 전용 */
+  dataUrl: string
+  widthPx: number
+  heightPx: number
   x: number
   y: number
 }
@@ -25,6 +40,16 @@ const MAX_SCALE = 8
 const ZOOM_SENSITIVITY = 0.0015
 /** fit-to-screen 시 화면 가장자리 여백 (px) */
 const FIT_PADDING = 24
+
+const OVERLAY_BUTTON_STYLE: React.CSSProperties = {
+  padding: '2px 10px',
+  fontSize: 12,
+  cursor: 'pointer',
+  border: '1px solid #475569',
+  borderRadius: 4,
+  background: '#1e293b',
+  color: 'inherit'
+}
 
 const clamp = (value: number, min: number, max: number): number =>
   Math.min(Math.max(value, min), max)
@@ -52,6 +77,7 @@ export function ProxyCanvas({ widthPx, heightPx }: ProxyCanvasProps): React.JSX.
   const [view, setView] = useState<ViewTransform>(() =>
     fitView(widthPx, heightPx, window.innerWidth, window.innerHeight)
   )
+  const [images, setImages] = useState<PlacedImage[]>([])
 
   /** 뷰포트(창) 리사이즈 추적 — 조작 이력 없으면 문서를 다시 맞춤 */
   useEffect(() => {
@@ -118,6 +144,64 @@ export function ProxyCanvas({ widthPx, heightPx }: ProxyCanvasProps): React.JSX.
     setView(fitView(widthPx, heightPx, window.innerWidth, window.innerHeight))
   }, [widthPx, heightPx])
 
+  /** 경로들을 기준점 중심에 캐스케이드 배치해 씬에 추가 */
+  const importPaths = useCallback(
+    async (paths: string[], center: DocPoint): Promise<void> => {
+      try {
+        const placed: PlacedImage[] = []
+        for (let i = 0; i < paths.length; i++) {
+          const imported = await window.api.importImage(paths[i])
+          const topLeft = centeredTopLeft(
+            imported.widthPx,
+            imported.heightPx,
+            center,
+            i,
+            view.scale
+          )
+          placed.push({
+            id: crypto.randomUUID(),
+            filePath: paths[i],
+            dataUrl: imported.dataUrl,
+            widthPx: imported.widthPx,
+            heightPx: imported.heightPx,
+            x: topLeft.x,
+            y: topLeft.y
+          })
+        }
+        setImages((prev) => [...prev, ...placed])
+      } catch (err) {
+        alert(`이미지 가져오기 실패: ${err instanceof Error ? err.message : String(err)}`)
+      }
+    },
+    [view.scale]
+  )
+
+  /** 파일 대화상자 임포트 — 현재 뷰 중심에 배치 */
+  const handleImport = useCallback((): void => {
+    void window.api.openImages().then((paths) => {
+      if (!paths || paths.length === 0) return
+      void importPaths(paths, viewCenterDoc(view, size.w, size.h))
+    })
+  }, [importPaths, view, size])
+
+  /** 드래그앤드롭 — 드롭 지점(문서 좌표)을 기준점으로 배치 */
+  const handleDrop = useCallback(
+    (e: React.DragEvent): void => {
+      e.preventDefault()
+      const paths = Array.from(e.dataTransfer.files).flatMap((file) => {
+        try {
+          const p = window.api.getPathForFile(file)
+          return p.length > 0 ? [p] : []
+        } catch {
+          return []
+        }
+      })
+      if (paths.length === 0) return
+      void importPaths(paths, screenToDoc(view, e.clientX, e.clientY))
+    },
+    [importPaths, view]
+  )
+
   const zoomPercent = Math.round(view.scale * 100)
 
   return (
@@ -129,6 +213,8 @@ export function ProxyCanvas({ widthPx, heightPx }: ProxyCanvasProps): React.JSX.
         overflow: 'hidden',
         cursor: spaceDown ? 'grab' : 'default'
       }}
+      onDragOver={(e) => e.preventDefault()}
+      onDrop={handleDrop}
     >
       <Stage
         ref={stageRef}
@@ -155,6 +241,11 @@ export function ProxyCanvas({ widthPx, heightPx }: ProxyCanvasProps): React.JSX.
             perfectDrawEnabled={false}
           />
         </Layer>
+        <Layer>
+          {images.map((placed) => (
+            <SceneImage key={placed.id} placed={placed} />
+          ))}
+        </Layer>
       </Stage>
 
       {/* 상태 오버레이: 문서 치수 · 현재 배율 · 맞춤 버튼 */}
@@ -179,18 +270,10 @@ export function ProxyCanvas({ widthPx, heightPx }: ProxyCanvasProps): React.JSX.
           {widthPx.toLocaleString()} × {heightPx.toLocaleString()} px
         </span>
         <span style={{ fontWeight: 700 }}>{zoomPercent}%</span>
-        <button
-          onClick={handleFit}
-          style={{
-            padding: '2px 10px',
-            fontSize: 12,
-            cursor: 'pointer',
-            border: '1px solid #475569',
-            borderRadius: 4,
-            background: '#1e293b',
-            color: 'inherit'
-          }}
-        >
+        <button onClick={handleImport} style={OVERLAY_BUTTON_STYLE}>
+          가져오기
+        </button>
+        <button onClick={handleFit} style={OVERLAY_BUTTON_STYLE}>
           맞춤
         </button>
       </div>
@@ -209,8 +292,24 @@ export function ProxyCanvas({ widthPx, heightPx }: ProxyCanvasProps): React.JSX.
           userSelect: 'none'
         }}
       >
-        휠: 줌 · Space + 드래그: 팬
+        휠: 줌 · Space + 드래그: 팬 · 이미지 드롭: 배치
       </div>
     </div>
+  )
+}
+
+/** 씬 이미지 노드 — 원본 px 크기 그대로 렌더 */
+function SceneImage({ placed }: { placed: PlacedImage }): React.JSX.Element | null {
+  const el = useHtmlImage(placed.dataUrl)
+  if (!el) return null
+  return (
+    <Image
+      x={placed.x}
+      y={placed.y}
+      width={placed.widthPx}
+      height={placed.heightPx}
+      image={el}
+      perfectDrawEnabled={false}
+    />
   )
 }
