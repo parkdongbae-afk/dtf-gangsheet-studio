@@ -3,7 +3,7 @@
 
 # Node
 node_modules/
-.eslintcache/
+.eslintcache
 .playwright-mcp/
 
 # 빌드 산출물 (electron-vite out/ · electron-builder release/)
