@@ -130,3 +130,40 @@ def test_write_psd_rejects_non_cmyk_layer_image(tmp_path: Path) -> None:
     spec = psd_writer.LayerSpec(Image.new("RGB", (10, 10), (0, 0, 0)), "rgb_layer", 0, 0)
     with pytest.raises(psd_writer.NonCmykLayerError):
         psd_writer.write_psd(tmp_path / "bad.psd", (100, 100), [spec])
+
+
+def test_write_psd_attaches_alpha_as_user_mask(tmp_path: Path) -> None:
+    """LayerSpec.alpha → USER_LAYER_MASK(-2) 저장·라운드트립 (S6 세션 1).
+
+    PIL CMYK는 알파를 담을 수 없어 psd-tools 공식 경로(픽셀 마스크)로
+    저장한다 — DTF 백색 잉크 영역(알파) 보존의 핵심 계약.
+    """
+    alpha = Image.new("L", (60, 40), 255)
+    alpha.putpixel((0, 0), 0)  # 좌상단 1픽셀만 투명
+    spec = psd_writer.LayerSpec(
+        _solid_cmyk((60, 40), (0, 128, 255)), "masked", top=5, left=5, alpha=alpha
+    )
+    path = tmp_path / "masked.psd"
+    psd_writer.write_psd(path, (200, 200), [spec])
+
+    psd = _open(path)
+    layer = _layer_by_name(psd, "masked")
+    ids = sorted(int(info.id) for info in layer._record.channel_info)
+    assert ids == [-2, -1, 0, 1, 2, 3]  # 마스크(-2) + 투명(-1) + C,M,Y,K
+    mask = layer.mask
+    assert mask is not None
+    assert (mask.left, mask.top) == (5, 5)  # 레이어와 정렬
+    decoded = mask.topil()
+    assert decoded is not None
+    assert decoded.getpixel((0, 0)) == 0
+    assert decoded.getpixel((30, 20)) == 255
+
+
+def test_write_psd_rejects_alpha_size_and_mode_mismatch(tmp_path: Path) -> None:
+    cmyk = _solid_cmyk((60, 40), (255, 0, 0))
+    with pytest.raises(psd_writer.PsdWriterError, match="alpha"):
+        bad_size = psd_writer.LayerSpec(cmyk, "x", 0, 0, alpha=Image.new("L", (10, 10)))
+        psd_writer.write_psd(tmp_path / "bad.psd", (200, 200), [bad_size])
+    with pytest.raises(psd_writer.PsdWriterError, match="alpha"):
+        bad_mode = psd_writer.LayerSpec(cmyk, "x", 0, 0, alpha=Image.new("RGB", (60, 40)))
+        psd_writer.write_psd(tmp_path / "bad.psd", (200, 200), [bad_mode])

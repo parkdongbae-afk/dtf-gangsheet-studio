@@ -10,6 +10,10 @@
   음수 좌표가 0으로 클리핑되지 않는다.
 - CMYK 레이어 채널: 투명(-1) + C,M,Y,K(0..3) = 5개. 채널 반전 저장은
   PSD 규격이며 psd-tools가 자동 처리한다.
+- 알파(DTF 백색 잉크 영역): PIL CMYK 모드는 알파를 담을 수 없으므로
+  ``LayerSpec.alpha``를 주면 psd-tools 공식 경로인 픽셀 마스크
+  (USER_LAYER_MASK, 채널 -2)로 저장한다 (``PixelLayer.frompil`` 문서
+  참조 — CMYK PSD의 알파 저장 방식).
 """
 
 from __future__ import annotations
@@ -22,6 +26,7 @@ from typing import Final
 
 from PIL import Image
 from psd_tools import PSDImage
+from psd_tools.api.layers import PixelLayer
 from psd_tools.constants import Resource
 from psd_tools.psd.image_resources import ImageResource
 
@@ -58,12 +63,18 @@ class NonCmykLayerError(PsdWriterError):
 
 @dataclass(frozen=True, slots=True)
 class LayerSpec:
-    """CMYK 레이어 배치 사양 — 좌표는 캔버스 원점 기준 signed(음수 = 캔버스 밖)."""
+    """CMYK 레이어 배치 사양 — 좌표는 캔버스 원점 기준 signed(음수 = 캔버스 밖).
+
+    ``alpha``는 레이어와 동일 크기의 'L' 모드 마스크 이미지(255=불투명).
+    PIL CMYK가 알파를 담을 수 없어 USER_LAYER_MASK로 저장한다 —
+    렌더러가 회전까지 마친 최종 알파를 전달한다.
+    """
 
     image: Image.Image
     name: str
     top: int
     left: int
+    alpha: Image.Image | None = None
 
 
 def write_psd(path: Path, size: tuple[int, int], layers: Sequence[LayerSpec]) -> None:
@@ -77,9 +88,24 @@ def write_psd(path: Path, size: tuple[int, int], layers: Sequence[LayerSpec]) ->
     _check_layers_cmyk(layers)
     psd = PSDImage.new("CMYK", (width, height))
     for spec in layers:
-        psd.create_pixel_layer(spec.image, name=spec.name, top=spec.top, left=spec.left)
+        layer: PixelLayer = psd.create_pixel_layer(
+            spec.image, name=spec.name, top=spec.top, left=spec.left
+        )
+        if spec.alpha is not None:
+            _attach_alpha(layer, spec)
     psd.image_resources[Resource.RESOLUTION_INFO] = _resolution_info(EXPORT_DPI)
     psd.save(path)
+
+
+def _attach_alpha(layer: PixelLayer, spec: LayerSpec) -> None:
+    """알파를 픽셀 마스크로 부착 — 크기 불일치는 저장 손상을 막기 위해 명시 검증."""
+    if spec.alpha is None or spec.alpha.mode != "L":
+        raise PsdWriterError(f"layer {spec.name!r} alpha must be an 'L' mode image")
+    if spec.alpha.size != spec.image.size:
+        raise PsdWriterError(
+            f"layer {spec.name!r} alpha size {spec.alpha.size} != image size {spec.image.size}"
+        )
+    layer.create_mask(spec.alpha, top=spec.top, left=spec.left)
 
 
 def _check_canvas_size(width: int, height: int) -> None:
