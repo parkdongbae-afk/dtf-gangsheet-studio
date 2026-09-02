@@ -88,7 +88,16 @@ class SidecarManager {
       windowsHide: true,
       // U2NET_HOME — rembg 모델 가중치 캐시 경로(REMOVEBG.MD §2). userData로
       // 고정해 개발·패키지 모두 프로젝트 폴더 오염 없이 오프라인 재사용
-      env: { ...process.env, U2NET_HOME: join(app.getPath('userData'), 'models') }
+      // PYTHONUTF8=1 — Python UTF-8 모드: 서드파티가 시스템 로캘(cp1252 등 charmap
+      // 계열)로 텍스트 인코딩하는 경로까지 전부 UTF-8로 강제. 서양권 로캘 기기에서
+      // 한글 경로·레이어명 렌더 시 UnicodeEncodeError(-32603)가 나던 결함 대응
+      // (2026-09-02 접수 — stdio는 server.py가 이미 재구성하지만 라이브러리 내부
+      // 로캘 인코딩까지 포괄 방어)
+      env: {
+        ...process.env,
+        U2NET_HOME: join(app.getPath('userData'), 'models'),
+        PYTHONUTF8: '1'
+      }
     })
     this.child = child
     this.stdin = child.stdin

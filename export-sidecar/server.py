@@ -239,11 +239,18 @@ def _log(message: str) -> None:
 
 
 def main() -> None:
-    """진입점 — stdio를 UTF-8로 재구성(Windows 로캘 무관) 후 NDJSON 루프."""
+    """진입점 — stdio를 UTF-8로 재구성(Windows 로캘 무관) 후 NDJSON 루프.
+
+    stderr도 UTF-8로 못박는다: 표준 파이썬은 stderr가 backslashreplace라
+    로그로 크래시하지 않지만, PyInstaller 번들 환경의 stderr 정책은 보장되지
+    않으므로 진단 로그("[sidecar] 한글 경로…")가 요청을 죽이는 일을 원천 차단한다.
+    """
     if isinstance(sys.stdin, io.TextIOWrapper):
         sys.stdin.reconfigure(encoding="utf-8")
     if isinstance(sys.stdout, io.TextIOWrapper):
         sys.stdout.reconfigure(encoding="utf-8", newline="\n")
+    if isinstance(sys.stderr, io.TextIOWrapper):
+        sys.stderr.reconfigure(encoding="utf-8", errors="backslashreplace")
     try:
         serve(sys.stdin, sys.stdout)
     except BrokenPipeError:
