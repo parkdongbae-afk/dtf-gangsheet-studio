@@ -62,6 +62,28 @@
 
 ---
 
+## 3.5 편집기 뷰 옵션 (2026-09-02 추가 — 가로폭 선택·자·그리드 표시)
+
+Phase 0~3과 동일한 Dark Industrial 토큰을 준수하는 신규 뷰 옵션. 전부 순수함수(Vitest)
++ 오버레이 렌더로, 씬 로직(PlacedImage·히스토리)은 불변.
+
+- **문서 가로폭 선택 (App.tsx)**: 문서 만들기 다이얼로그에서 5cm 단위 select 드롭다운
+  (5~100cm, 기본 50cm). 옆에 px 환산 `text-[10px] tabular-nums text-zinc-500`.
+- **자(Ruler) 오버레이 (RulerOverlay.tsx)**: 뷰포트 상단·좌측 22px HTML canvas 스트립.
+  배경 `#18181b`(zinc-900 계열), 문서 범위 하이라이트 `#27272a`(zinc-800), 라벨 9px
+  monospace `#a1a1aa`, 눈금 `#52525b`/`#71717a`, 테두리 `#3f3f46`. 좌측 라벨은 -90°
+  회전, 좌상단 코너에 "cm" 단위 표기. `pointer-events-none`(캔버스 조작 통과).
+- **그리드 표시 설정 다이얼로그 (GridSettingsDialog.tsx)**: GridDialog 패턴(Escape·
+  배경 클릭 닫기·`onMouseDown` stopPropagation) 준수. 구성 — 표시 토글 스위치(indigo
+  ON/zinc-700 OFF), 간격 number input(0.5~50cm step 0.5, 단위 라벨 cm), 색상 8 프리셋
+  스와치 + conic-gradient 커스텀 color input, 선 스타일 3 segmented 버튼(실선/대시/
+  도트, CSS border-top 프리뷰). 변경은 즉시 라이브 반영(보기 옵션 — 히스토리 없음).
+- **툴바**: "그리드" 버튼(Grid2x2 아이콘) — 표시 중 `active` 상태(indigo 테두리+
+  bg-indigo-500/15+text-indigo-300) 강조. OverlayButton에 `active` 변형 신규.
+  툴바·치수 HUD는 상단 자(22px)와 겹치지 않도록 `top-3`→`top-8`.
+
+---
+
 ## 4. AI 세션용 프롬프트 템플릿
 
 특정 컴포넌트 개편 시 아래 프롬프트를 복사하여 AI 에이전트에 입력한다.
