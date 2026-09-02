@@ -5,6 +5,7 @@ import icon from '../../resources/icon.png?asset'
 import { registerImageImportIpc } from './ipc/imageImport'
 import { registerExportIpc, runExportTestHook } from './ipc/export'
 import { registerRemoveBgIpc } from './ipc/removeBg'
+import { registerGuidePdfIpc } from './ipc/openGuidePdf'
 
 function createWindow(): void {
   // Create the browser window.
@@ -64,6 +65,7 @@ app.whenReady().then(() => {
   registerImageImportIpc()
   registerExportIpc()
   registerRemoveBgIpc()
+  registerGuidePdfIpc()
 
   createWindow()
 

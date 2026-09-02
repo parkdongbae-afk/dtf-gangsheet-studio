@@ -16,7 +16,9 @@ const api: DtfApi = {
       listener(progress)
     ipcRenderer.on('export:progress', wrapped)
     return () => ipcRenderer.removeListener('export:progress', wrapped)
-  }
+  },
+  openGuidePdf: (): Promise<void> => ipcRenderer.invoke('util:open-guide-pdf'),
+  openManualPdf: (): Promise<void> => ipcRenderer.invoke('util:open-manual-pdf')
 }
 
 // Use `contextBridge` APIs to expose Electron APIs to

@@ -22,6 +22,12 @@ asarUnpack:
 extraResources:
   - from: export-sidecar/dist/dtf-sidecar.exe
     to: dtf-sidecar/dtf-sidecar.exe
+  # 속성 패널 "포토샵 클라우드 가이드" 버튼용 PDF — 리소스 루트에 배치, openPath로 열림
+  - from: resources/photoshop_cloud_guide.pdf
+    to: photoshop_cloud_guide.pdf
+  # 속성 패널 푸터 "사용자 메뉴얼" 버튼용 PDF — 동일 경로 계약
+  - from: resources/DTF_사용자_메뉴얼.pdf
+    to: DTF_사용자_메뉴얼.pdf
 win:
   executableName: DTFGangSheetStudio
   icon: build/icon.ico

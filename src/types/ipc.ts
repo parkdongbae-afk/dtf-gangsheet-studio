@@ -60,7 +60,6 @@ export interface DtfApi {
   /** 배경 제거(rembg 사이드카) — 처리된 RGBA PNG 경로 + 프리뷰 반환 (v2) */
   removeBackground(filePath: string): Promise<RemoveBgImage>
   /** 드래그앤드롭 File → 절대 경로 — Electron 32+ 에서 File.path 제거의 공식 대체 */
-  /** 드래그앤드롭 File → 절대 경로 — Electron 32+ 에서 File.path 제거의 공식 대체 */
   getPathForFile(file: File): string
   /** 내보내기 저장 대화상자 — 포맷별 확장자 필터, 취소 시 null */
   exportSaveDialog(format: ExportFormat): Promise<string | null>
@@ -70,4 +69,8 @@ export interface DtfApi {
   cancelExport(): Promise<void>
   /** 내보내기 진행 알림 구독 — 반환 함수 호출로 구독 해제 */
   onExportProgress(listener: (progress: ExportProgress) => void): () => void
+  /** 번들된 가이드 PDF를 시스템 기본 뷰어로 열기 */
+  openGuidePdf(): Promise<void>
+  /** 번들된 사용자 메뉴얼 PDF를 시스템 기본 뷰어로 열기 */
+  openManualPdf(): Promise<void>
 }
