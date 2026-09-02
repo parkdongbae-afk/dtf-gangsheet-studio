@@ -1,11 +1,12 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type Konva from 'konva'
 import type { Box } from 'konva/lib/shapes/Transformer'
-import { Image, Layer, Rect, Stage, Transformer } from 'react-konva'
+import { Image, Layer, Rect, Shape, Stage, Transformer } from 'react-konva'
 import {
   Boxes,
   Expand,
   FileOutput,
+  Grid2x2,
   Grid3x3,
   ImagePlus,
   Maximize,
@@ -15,8 +16,17 @@ import {
 } from 'lucide-react'
 import { ExportDialog } from './ExportDialog'
 import { GridDialog } from './GridDialog'
+import { GridSettingsDialog } from './GridSettingsDialog'
 import { NestingDialog } from './NestingDialog'
+import { RulerOverlay } from './RulerOverlay'
+import { BgSitesDialog } from '../BgSitesDialog'
 import { packImages } from './autoNesting'
+import {
+  DEFAULT_GRID_SETTINGS,
+  gridDash,
+  gridLinePositions,
+  type GridSettings
+} from './gridOverlay'
 import {
   calculateGridPositions,
   centeredTopLeft,
@@ -127,8 +137,12 @@ export function ProxyCanvas({ widthPx, heightPx }: ProxyCanvasProps): React.JSX.
   })
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [gridOpen, setGridOpen] = useState(false)
+  const [gridSettingsOpen, setGridSettingsOpen] = useState(false)
+  const [bgSitesOpen, setBgSitesOpen] = useState(false)
   const [exportOpen, setExportOpen] = useState(false)
   const [nestingOpen, setNestingOpen] = useState(false)
+  /** 그리드 표시 설정 — 보기 옵션이라 히스토리(undo) 대상 아님 */
+  const [gridSettings, setGridSettings] = useState<GridSettings>(DEFAULT_GRID_SETTINGS)
   /** 배경 제거 진행 중 — 사이드카 추론(첫 요청은 모델 다운로드 포함) 동안 버튼 잠금 */
   const [removeBusy, setRemoveBusy] = useState(false)
 
@@ -198,7 +212,15 @@ export function ProxyCanvas({ widthPx, heightPx }: ProxyCanvasProps): React.JSX.
   /** 스페이스 홀드 = 팬 모드 (커서 grab + Stage 드래그 활성) — 텍스트 입력·모달 중 무시 */
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent): void => {
-      if (gridOpen || exportOpen || nestingOpen || isEditableTarget(e.target)) return
+      if (
+        gridOpen ||
+        gridSettingsOpen ||
+        bgSitesOpen ||
+        exportOpen ||
+        nestingOpen ||
+        isEditableTarget(e.target)
+      )
+        return
       if (e.code === 'Space' && !e.repeat) {
         e.preventDefault()
         setSpaceDown(true)
@@ -216,7 +238,7 @@ export function ProxyCanvas({ widthPx, heightPx }: ProxyCanvasProps): React.JSX.
       window.removeEventListener('keyup', onKeyUp)
       window.removeEventListener('blur', onBlur)
     }
-  }, [gridOpen, exportOpen, nestingOpen])
+  }, [gridOpen, gridSettingsOpen, bgSitesOpen, exportOpen, nestingOpen])
 
   /**
    * 씬 편집 단축키 (통합) — Ctrl+Z=실행취소, Ctrl+Shift+Z/Ctrl+Y=다시실행(선택 불필요),
@@ -224,7 +246,7 @@ export function ProxyCanvas({ widthPx, heightPx }: ProxyCanvasProps): React.JSX.
    * 대화상자 모달 중·텍스트 입력 포커스 중에는 전면 무시한다.
    */
   useEffect(() => {
-    if (gridOpen || exportOpen || nestingOpen) return
+    if (gridOpen || gridSettingsOpen || bgSitesOpen || exportOpen || nestingOpen) return
     const onKeyDown = (e: KeyboardEvent): void => {
       if (isEditableTarget(e.target)) return
       const mod = e.ctrlKey || e.metaKey
@@ -270,7 +292,19 @@ export function ProxyCanvas({ widthPx, heightPx }: ProxyCanvasProps): React.JSX.
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [selectedId, images, view.scale, gridOpen, exportOpen, nestingOpen, commitImages, undo, redo])
+  }, [
+    selectedId,
+    images,
+    view.scale,
+    gridOpen,
+    gridSettingsOpen,
+    bgSitesOpen,
+    exportOpen,
+    nestingOpen,
+    commitImages,
+    undo,
+    redo
+  ])
 
   /** 단일 공유 트랜스포머에 선택 노드만 바인딩 — 노드 드래그는 트랜스포머가 자동 추적 */
   useEffect(() => {
@@ -299,6 +333,12 @@ export function ProxyCanvas({ widthPx, heightPx }: ProxyCanvasProps): React.JSX.
         y: pointer.y - (pointer.y - prev.y) * ratio
       }
     })
+  }
+
+  /** 팬 진행 중 뷰 동기화 — 자(ruler) 오버레이가 스테이지 드래그를 실시간 추적 */
+  const handleDragMove = (e: Konva.KonvaEventObject<DragEvent>): void => {
+    interactedRef.current = true
+    setView((prev) => ({ ...prev, x: e.currentTarget.x(), y: e.currentTarget.y() }))
   }
 
   /** 팬 종료 — Konva 내장 드래그가 이동시킨 stage.position을 상태로 동기화 */
@@ -518,6 +558,14 @@ export function ProxyCanvas({ widthPx, heightPx }: ProxyCanvasProps): React.JSX.
 
   const zoomPercent = Math.round(view.scale * 100)
   const selectedIndex = selectedId ? images.findIndex((img) => img.id === selectedId) : -1
+  const gridV = useMemo(
+    () => gridLinePositions(widthPx, gridSettings.intervalCm),
+    [widthPx, gridSettings.intervalCm]
+  )
+  const gridH = useMemo(
+    () => gridLinePositions(heightPx, gridSettings.intervalCm),
+    [heightPx, gridSettings.intervalCm]
+  )
 
   return (
     <div
@@ -540,6 +588,7 @@ export function ProxyCanvas({ widthPx, heightPx }: ProxyCanvasProps): React.JSX.
           y={view.y}
           draggable={spaceDown}
           onWheel={handleWheel}
+          onDragMove={handleDragMove}
           onDragEnd={handleDragEnd}
           onMouseDown={handleStageMouseDown}
         >
@@ -557,6 +606,31 @@ export function ProxyCanvas({ widthPx, heightPx }: ProxyCanvasProps): React.JSX.
               perfectDrawEnabled={false}
             />
           </Layer>
+          {gridSettings.visible && (
+            <Layer listening={false}>
+              {/* 격자 오버레이 — 단일 Shape에 전체 경로를 한 번에 그린다(노드 수 폭주 방지).
+                  대시·스트로크는 1/scale 보정으로 줌과 무관한 화면 1px 두께 유지 */}
+              <Shape
+                sceneFunc={(ctx, shape) => {
+                  ctx.beginPath()
+                  for (const x of gridV) {
+                    ctx.moveTo(x, 0)
+                    ctx.lineTo(x, heightPx)
+                  }
+                  for (const y of gridH) {
+                    ctx.moveTo(0, y)
+                    ctx.lineTo(widthPx, y)
+                  }
+                  ctx.strokeShape(shape)
+                }}
+                stroke={gridSettings.color}
+                strokeWidth={1 / view.scale}
+                dash={gridDash(gridSettings.lineStyle, view.scale)}
+                lineCap={gridSettings.lineStyle === 'dotted' ? 'round' : 'butt'}
+                perfectDrawEnabled={false}
+              />
+            </Layer>
+          )}
           <Layer>
             {images.map((placed) => (
               <SceneImage
@@ -585,8 +659,17 @@ export function ProxyCanvas({ widthPx, heightPx }: ProxyCanvasProps): React.JSX.
           </Layer>
         </Stage>
 
-        {/* 상태 오버레이: 문서 치수 · 현재 배율 · 툴바 */}
-        <div className="absolute right-3 top-3 flex select-none items-center gap-2">
+        {/* 문서 바깥 자 — 상단(가로 cm)·좌측(세로 cm), 문서 범위 하이라이트 포함 */}
+        <RulerOverlay
+          view={view}
+          viewportW={size.w}
+          viewportH={size.h}
+          docW={widthPx}
+          docH={heightPx}
+        />
+
+        {/* 상태 오버레이: 문서 치수 · 현재 배율 · 툴바 — 상단 자(22px) 아래에 위치 */}
+        <div className="absolute right-3 top-8 flex select-none items-center gap-2">
           <div className="flex items-center gap-2 rounded-md border border-zinc-800 bg-zinc-900 px-2.5 py-1 text-[11px] tabular-nums text-zinc-400">
             <span>
               {widthPx.toLocaleString()} × {heightPx.toLocaleString()} px
@@ -602,10 +685,18 @@ export function ProxyCanvas({ widthPx, heightPx }: ProxyCanvasProps): React.JSX.
             <OverlayButton
               onClick={() => setGridOpen(true)}
               disabled={!selectedItem}
-              title="그리드 복제"
+              title="이미지 복제"
             >
               <Grid3x3 size={14} strokeWidth={1.5} />
-              그리드 복제
+              이미지 복제
+            </OverlayButton>
+            <OverlayButton
+              onClick={() => setGridSettingsOpen(true)}
+              active={gridSettings.visible}
+              title="그리드 표시 설정 (간격·색·선 스타일)"
+            >
+              <Grid2x2 size={14} strokeWidth={1.5} />
+              그리드
             </OverlayButton>
             <OverlayButton
               onClick={() => handleFitMode('cover')}
@@ -662,10 +753,21 @@ export function ProxyCanvas({ widthPx, heightPx }: ProxyCanvasProps): React.JSX.
         {gridOpen && selectedItem && (
           <GridDialog
             item={selectedItem}
+            widthPx={widthPx}
             onConfirm={handleGridConfirm}
             onClose={() => setGridOpen(false)}
           />
         )}
+
+        {gridSettingsOpen && (
+          <GridSettingsDialog
+            settings={gridSettings}
+            onChange={setGridSettings}
+            onClose={() => setGridSettingsOpen(false)}
+          />
+        )}
+
+        {bgSitesOpen && <BgSitesDialog onClose={() => setBgSitesOpen(false)} />}
 
         {nestingOpen && images.length > 0 && (
           <NestingDialog
@@ -704,6 +806,7 @@ export function ProxyCanvas({ widthPx, heightPx }: ProxyCanvasProps): React.JSX.
         onOpenGrid={() => setGridOpen(true)}
         onRemoveBg={handleRemoveBg}
         removeBusy={removeBusy}
+        onOpenBgSites={() => setBgSitesOpen(true)}
       />
     </div>
   )
@@ -723,6 +826,8 @@ interface OverlayButtonProps {
   disabled?: boolean
   title?: string
   primary?: boolean
+  /** 활성 상태 강조 (토글성 버튼 — 그리드 표시 등) */
+  active?: boolean
   children: React.ReactNode
 }
 
@@ -732,6 +837,7 @@ function OverlayButton({
   disabled = false,
   title,
   primary = false,
+  active = false,
   children
 }: OverlayButtonProps): React.JSX.Element {
   return (
@@ -744,7 +850,9 @@ function OverlayButton({
       className={`flex h-8 items-center gap-1.5 rounded-md px-2.5 text-xs transition-colors active:scale-95 disabled:pointer-events-none disabled:opacity-40 ${
         primary
           ? 'border border-indigo-500 bg-indigo-600 font-medium text-white hover:bg-indigo-500'
-          : 'text-zinc-300 hover:bg-zinc-800 hover:text-zinc-100'
+          : active
+            ? 'border border-indigo-500 bg-indigo-500/15 font-medium text-indigo-300 hover:bg-indigo-500/25'
+            : 'text-zinc-300 hover:bg-zinc-800 hover:text-zinc-100'
       }`}
     >
       {children}

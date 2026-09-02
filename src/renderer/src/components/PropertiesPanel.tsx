@@ -2,10 +2,13 @@ import { useState } from 'react'
 import {
   ArrowDownToLine,
   ArrowUpToLine,
+  BookOpen,
   ChevronDown,
   ChevronUp,
   Copy,
   Eraser,
+  ExternalLink,
+  Globe,
   Grid3x3,
   Layers,
   Link2,
@@ -31,6 +34,8 @@ export interface PropertiesPanelProps {
   onOpenGrid: () => void
   onRemoveBg: () => void
   removeBusy: boolean
+  /** 배경 제거 사이트 다이얼로그 열기 */
+  onOpenBgSites: () => void
 }
 
 function Section({
@@ -162,7 +167,8 @@ export function PropertiesPanel({
   onOrder,
   onOpenGrid,
   onRemoveBg,
-  removeBusy
+  removeBusy,
+  onOpenBgSites
 }: PropertiesPanelProps): React.JSX.Element {
   const [linked, setLinked] = useState(true)
 
@@ -201,6 +207,15 @@ export function PropertiesPanel({
           <span className="text-[10px] text-zinc-600">
             캔버스에서 이미지를 클릭하면 위치·크기·레이어를 편집할 수 있습니다
           </span>
+          <button
+            type="button"
+            onClick={onOpenBgSites}
+            title="고해상도 다운로드가 가능한 무료 AI 누끼 서비스 모음 열기"
+            className="mt-3 flex items-center gap-2 rounded-md border border-zinc-800 bg-zinc-900 px-3 py-1.5 text-xs text-zinc-300 transition-colors hover:bg-zinc-800 active:scale-[0.98]"
+          >
+            <Globe size={13} strokeWidth={1.5} className="text-zinc-400" />
+            배경 제거 사이트…
+          </button>
         </div>
       ) : (
         <div className="flex-1 overflow-y-auto" key={item.id}>
@@ -323,10 +338,19 @@ export function PropertiesPanel({
               AI 누끼로 배경을 투명하게 제거합니다. 첫 사용 시 모델 다운로드(약 1GB) 후 오프라인
               동작하며, 처리 중 잠시 멈출 수 있습니다. Ctrl+Z로 되돌릴 수 있습니다.
             </p>
+            <button
+              type="button"
+              onClick={onOpenBgSites}
+              title="고해상도 다운로드가 가능한 무료 AI 누끼 서비스 모음 열기"
+              className="mt-1.5 flex w-full items-center justify-center gap-2 rounded-md border border-zinc-800 bg-zinc-900 py-1.5 text-xs text-zinc-300 transition-colors hover:bg-zinc-800 active:scale-[0.98]"
+            >
+              <Globe size={13} strokeWidth={1.5} className="text-zinc-400" />
+              배경 제거 사이트…
+            </button>
           </Section>
 
           <Section
-            title="그리드 복제"
+            title="이미지 복제"
             icon={<Grid3x3 size={ICON.size} strokeWidth={ICON.strokeWidth} />}
           >
             <button
@@ -335,13 +359,13 @@ export function PropertiesPanel({
               className="flex w-full items-center justify-center gap-2 rounded-md border border-indigo-500 bg-indigo-500/15 py-2 text-xs font-medium text-indigo-300 transition-colors hover:bg-indigo-500/25 active:scale-95"
             >
               <Copy size={ICON.size} strokeWidth={ICON.strokeWidth} />
-              그리드 복제…
+              이미지 복제…
             </button>
           </Section>
         </div>
       )}
 
-      <div className="border-t border-zinc-800 px-3 py-2.5">
+      <div className="flex flex-col gap-1.5 border-t border-zinc-800 px-3 py-2.5">
         <div className="flex items-center justify-between text-[10px] tabular-nums text-zinc-500">
           <span>{item ? '선택 영역' : '문서'}</span>
           <span className="text-zinc-300">
@@ -350,6 +374,16 @@ export function PropertiesPanel({
               : `배치 ${itemCount}개`}
           </span>
         </div>
+        <button
+          type="button"
+          onClick={() => void window.api?.openManualPdf()}
+          title="번들된 사용자 메뉴얼 PDF를 기본 뷰어로 엽니다"
+          className="flex items-center gap-2 rounded-md border border-zinc-800 bg-zinc-900 px-3 py-1.5 text-xs text-zinc-300 transition-colors hover:bg-zinc-800 active:scale-[0.98]"
+        >
+          <BookOpen size={13} strokeWidth={1.5} className="shrink-0 text-zinc-400" />
+          <span className="flex-1 text-left">사용자 메뉴얼 (PDF)</span>
+          <ExternalLink size={11} strokeWidth={1.5} className="shrink-0 text-zinc-600" />
+        </button>
       </div>
     </aside>
   )
