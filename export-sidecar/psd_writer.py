@@ -113,6 +113,13 @@ def write_psd(
         layer: PixelLayer = psd.create_pixel_layer(
             spec.image, name=spec.name, top=spec.top, left=spec.left
         )
+        # create_pixel_layer(frompil)은 저수준 LayerRecord.name에 원문을 그대로
+        # 저장해 save() 시 mac_roman 파스칼 문자열 인코딩에서 비-Latin 레이어명
+        # (한글 등)이 UnicodeEncodeError로 죽는다(psd-tools 1.18 실측 — '?' 폴백은
+        # 고수준 name 속성 세터에만 존재하고 생성 경로는 우회함). 고수준 세터로
+        # 재지정하면 파스칼명은 mac_roman 세이프('?')로 강등되고 원명은 luni
+        # 유니코드 블록(Photoshop 표준)에 온전히 보존된다.
+        layer.name = spec.name
         if spec.alpha is not None:
             _attach_alpha(layer, spec)
     psd.image_resources[Resource.RESOLUTION_INFO] = _resolution_info(EXPORT_DPI)

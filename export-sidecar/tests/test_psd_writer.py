@@ -121,6 +121,27 @@ def test_write_psd_roundtrip_preserves_layer_pixels(spike_psd: Path) -> None:
     assert decoded.getpixel((0, 0)) == original.getpixel((0, 0)) == (0, 255, 255, 0)
 
 
+def test_write_psd_non_mac_roman_layer_names_roundtrip(tmp_path: Path) -> None:
+    """비-Latin(한글·이모지) 레이어명 — 파스칼명 '?' 폴백 + luni 유니코드 원명 보존.
+
+    psd-tools 1.18의 create_pixel_layer은 저수준 레코드에 이름을 그대로 넣어
+    save()에서 mac_roman('charmap') 인코딩 오류로 죽는다(2026-09-02 접수 결함 —
+    write_psd의 고수준 name 세터 재지정으로 방어). 이 테스트는 그 회귀를 잡는다.
+    """
+    names = ["한글 레이어", "이모지😀디자인"]
+    layers = [
+        psd_writer.LayerSpec(_solid_cmyk((80, 60), (255, 0, 0)), name, top=0, left=index * 80)
+        for index, name in enumerate(names)
+    ]
+    path = tmp_path / "unicode-names.psd"
+    psd_writer.write_psd(path, (200, 100), layers)
+
+    psd = _open(path)
+    assert sorted(layer.name for layer in psd) == sorted(names)  # luni 원명
+    for layer in psd:
+        assert layer._record.name == "?"  # 파스칼명 mac_roman 세이프 폴백
+
+
 def test_write_psd_rejects_canvas_over_psd_limit(tmp_path: Path) -> None:
     with pytest.raises(psd_writer.CanvasSizeError):
         psd_writer.write_psd(tmp_path / "over.psd", (30_001, 100), [])
