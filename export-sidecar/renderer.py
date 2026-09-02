@@ -252,12 +252,21 @@ def _prepare_item(item: ManifestItem, dpi: int, index: int) -> _PreparedItem:
     if item.rotation % 360 != 0:
         placed = placed.rotate(-item.rotation, resample=Image.Resampling.BICUBIC, expand=True)
 
-    # Konva 배치 규약: x,y는 회전 전 좌상단, 회전은 중심 기준 — 회전 바운딩
-    # 박스의 좌상단 = 중심 - (회전 후 치수)/2 (placement.ts fitToCanvas와 동일 수학)
-    center_x = cm_to_px(item.x_cm, dpi) + width_px / 2
-    center_y = cm_to_px(item.y_cm, dpi) + height_px / 2
-    left = math.floor(center_x - placed.width / 2 + 0.5)
-    top = math.floor(center_y - placed.height / 2 + 0.5)
+    # Konva 원점 피벗 규약(placement.ts fitToCanvas·autoNesting.ts originToCoverCell과
+    # 동일 수학): x,y는 회전 전 좌상단이자 회전 피벗(offset 없음). 로컬 4모서리
+    # (0,0)(w,0)(0,h)(w,h)의 회전 오프셋 최솟값을 피벗에 더하면 회전 바운딩 박스의
+    # 좌상단이 된다. 중심 고정 수식을 쓰면 회전 항목이 편집기 화면과 어긋난다.
+    rad = math.radians(item.rotation)
+    cos = math.cos(rad)
+    sin = math.sin(rad)
+    x_px = cm_to_px(item.x_cm, dpi)
+    y_px = cm_to_px(item.y_cm, dpi)
+    left = math.floor(
+        x_px + min(0.0, width_px * cos, -height_px * sin, width_px * cos - height_px * sin) + 0.5
+    )
+    top = math.floor(
+        y_px + min(0.0, width_px * sin, height_px * cos, width_px * sin + height_px * cos) + 0.5
+    )
 
     return _PreparedItem(image=placed, name=_layer_name(item.src, index), top=top, left=left)
 

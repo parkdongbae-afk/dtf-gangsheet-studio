@@ -219,9 +219,10 @@ def test_render_rotation_90_clockwise_matches_konva(tmp_path: Path, half_alpha_p
 
     psd = PSDImage.open(out)
     (layer,) = list(psd)
-    # 배치: 중심 (551+138, 413+69), 회전 후 치수 (138,276) → 좌상단 (620, 344)
+    # Konva 원점 피벗: 피벗 (551,413)에서 시계 90° 회전 → 좌상단 (551−138, 413),
+    # 회전 후 치수 (138,276)
     assert (layer.width, layer.height) == (138, 276)
-    assert layer.bbox == (620, 344, 620 + 138, 344 + 276)
+    assert layer.bbox == (413, 413, 413 + 138, 413 + 276)
 
     ids = sorted(int(info.id) for info in layer._record.channel_info)
     assert ids == [-2, -1, 0, 1, 2, 3]  # USER_LAYER_MASK(-2) 포함 = 알파 보존
@@ -231,6 +232,60 @@ def test_render_rotation_90_clockwise_matches_konva(tmp_path: Path, half_alpha_p
     assert mask.size == (138, 276)
     assert mask.getpixel((69, 10)) == 255  # 회전 후 상단 = 원본 좌측 절반 → 불투명
     assert mask.getpixel((69, 270)) == 0  # 하단 = 원본 우측 절반 → 투명(백색 잉크 없음)
+
+
+def test_render_rotation_negative_90_bbox(tmp_path: Path, half_alpha_png: Path) -> None:
+    """rotation=-90(반시계) — 4모서리 최솟값이 양수 사분면으로 옮겨가 bbox 좌상단
+    은 피벗 (551,413)에서 (551, 413−276)=(551,137)이 된다."""
+    out = tmp_path / "rot_neg.psd"
+    manifest = renderer.parse_manifest(
+        _manifest_dict(
+            out,
+            [
+                {
+                    "src": str(half_alpha_png),
+                    "x_cm": 4,
+                    "y_cm": 3,
+                    "width_cm": 2,
+                    "height_cm": 1,
+                    "rotation": -90,
+                }
+            ],
+        )
+    )
+    renderer.render_manifest(manifest)
+
+    psd = PSDImage.open(out)
+    (layer,) = list(psd)
+    assert (layer.width, layer.height) == (138, 276)
+    assert layer.bbox == (551, 137, 551 + 138, 137 + 276)
+
+
+def test_render_rotation_diagonal_bbox_floor(tmp_path: Path, half_alpha_png: Path) -> None:
+    """rotation=45 — 축정렬이 아닌 각도에서도 피벗 수학을 그대로 따른다:
+    x오프셋 최솟값 = −h·sin45°(≈−97.58) → left=453, y오프셋 최솟값 = 0 → top=413."""
+    out = tmp_path / "rot45.psd"
+    manifest = renderer.parse_manifest(
+        _manifest_dict(
+            out,
+            [
+                {
+                    "src": str(half_alpha_png),
+                    "x_cm": 4,
+                    "y_cm": 3,
+                    "width_cm": 2,
+                    "height_cm": 1,
+                    "rotation": 45,
+                }
+            ],
+        )
+    )
+    renderer.render_manifest(manifest)
+
+    psd = PSDImage.open(out)
+    (layer,) = list(psd)
+    # 치수는 PIL expand의 올림(293×293)이지만 위치 단정이 핵심 — 에디터와 같은 피벗 수학
+    assert (layer.left, layer.top) == (453, 413)
 
 
 def test_render_opaque_image_has_no_mask(tmp_path: Path, red_png: Path) -> None:
