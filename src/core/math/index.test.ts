@@ -1,11 +1,17 @@
 import { describe, expect, it } from 'vitest'
 import {
   CANVAS_WIDTH_PX,
+  CanvasSizeLimitError,
   DTF_WIDTH_CM,
   HEIGHT_PRESETS_M,
+  MAX_WIDTH_CM,
+  MIN_WIDTH_CM,
   PSD_MAX_PX,
+  WIDTH_PRESETS_CM,
+  WIDTH_STEP_CM,
   cmToPx,
   getCanvasHeightPx,
+  getCanvasWidthPx,
   pxToCm
 } from './index'
 
@@ -67,5 +73,38 @@ describe('문서 규격 상수', () => {
 
   it('세로 프리셋은 1m·2m만 존재', () => {
     expect([...HEIGHT_PRESETS_M]).toEqual([1, 2])
+  })
+})
+
+describe('getCanvasWidthPx — 가로 폭 선택', () => {
+  it('50cm → 6,890px (기본 DTF 롤 폭)', () => {
+    expect(getCanvasWidthPx(50)).toBe(CANVAS_WIDTH_PX)
+  })
+
+  it('100cm(1m) → 13,780px — 최대 허용', () => {
+    expect(getCanvasWidthPx(100)).toBe(13780)
+  })
+
+  it('5cm → 6,890px 미만 (689px)', () => {
+    expect(getCanvasWidthPx(5)).toBe(cmToPx(5))
+  })
+
+  it('250cm → PSD 한계 초과로 throw', () => {
+    expect(() => getCanvasWidthPx(250)).toThrowError(CanvasSizeLimitError)
+  })
+})
+
+describe('WIDTH_PRESETS_CM — 5cm 단위 프리셋', () => {
+  it('5~100cm까지 5cm 스텝 20개', () => {
+    expect(WIDTH_PRESETS_CM).toHaveLength(20)
+    expect(WIDTH_PRESETS_CM[0]).toBe(MIN_WIDTH_CM)
+    expect(WIDTH_PRESETS_CM[WIDTH_PRESETS_CM.length - 1]).toBe(MAX_WIDTH_CM)
+  })
+
+  it('모든 프리셋이 5cm 배수이고 PSD 한계 내', () => {
+    for (const cm of WIDTH_PRESETS_CM) {
+      expect(cm % WIDTH_STEP_CM).toBe(0)
+      expect(cmToPx(cm)).toBeLessThanOrEqual(PSD_MAX_PX)
+    }
   })
 })

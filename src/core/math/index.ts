@@ -6,11 +6,26 @@
 /** PSD 표준 최대 치수 — 변당 30,000px (3m=41,339px 금지의 근거) */
 export const PSD_MAX_PX = 30_000
 
-/** DTF 롤 가로 폭 (cm) — 고정 */
+/** DTF 롤 기본 가로 폭 (cm) — 가로폭 선택 기본값 */
 export const DTF_WIDTH_CM = 50
 
 /** 문서 캔버스 가로 (px) — 50cm @ 350dpi = 6,890 */
 export const CANVAS_WIDTH_PX = cmToPx(DTF_WIDTH_CM, 350)
+
+/** 가로 폭 선택 단위 (cm) — 5cm 스텝 */
+export const WIDTH_STEP_CM = 5
+
+/** 가로 폭 최소 (cm) — 스텝 1개 */
+export const MIN_WIDTH_CM = 5
+
+/** 가로 폭 최대 (cm) — 1m */
+export const MAX_WIDTH_CM = 100
+
+/** 가로 폭 프리셋 — 5cm 단위 5~100cm */
+export const WIDTH_PRESETS_CM: readonly number[] = Array.from(
+  { length: MAX_WIDTH_CM / WIDTH_STEP_CM },
+  (_, i) => MIN_WIDTH_CM + i * WIDTH_STEP_CM
+)
 
 /** 세로 길이 프리셋 — 1m·2m만 허용 (3m+는 PSD 한계 초과) */
 export const HEIGHT_PRESETS_M = [1, 2] as const
@@ -41,6 +56,15 @@ export class CanvasSizeLimitError extends Error {
 /** 세로 길이(m) → 캔버스 높이(px). 1m=13,780 / 2m=27,559. */
 export function getCanvasHeightPx(heightInMeters: number): number {
   const px = cmToPx(heightInMeters * 100, 350)
+  if (px > PSD_MAX_PX) {
+    throw new CanvasSizeLimitError(px)
+  }
+  return px
+}
+
+/** 가로 폭(cm) → 캔버스 폭(px). 50cm=6,890 / 100cm=13,780 (PSD 한계 내). */
+export function getCanvasWidthPx(widthCm: number): number {
+  const px = cmToPx(widthCm, 350)
   if (px > PSD_MAX_PX) {
     throw new CanvasSizeLimitError(px)
   }
