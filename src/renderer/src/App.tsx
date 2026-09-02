@@ -1,22 +1,25 @@
 import { useState } from 'react'
-import { FilePlus2 } from 'lucide-react'
+import { ChevronDown, FilePlus2 } from 'lucide-react'
 import {
-  CANVAS_WIDTH_PX,
   DTF_WIDTH_CM,
   HEIGHT_PRESETS_M,
+  WIDTH_PRESETS_CM,
   getCanvasHeightPx,
+  getCanvasWidthPx,
   type HeightPresetM
 } from '../../core/math'
 import { ProxyCanvas } from './components/canvas/ProxyCanvas'
 
 function App(): React.JSX.Element {
+  const [widthCm, setWidthCm] = useState<number>(DTF_WIDTH_CM)
   const [heightM, setHeightM] = useState<HeightPresetM>(1)
   const [created, setCreated] = useState(false)
 
+  const widthPx = getCanvasWidthPx(widthCm)
   const heightPx = getCanvasHeightPx(heightM)
 
   if (created) {
-    return <ProxyCanvas widthPx={CANVAS_WIDTH_PX} heightPx={heightPx} />
+    return <ProxyCanvas widthPx={widthPx} heightPx={heightPx} />
   }
 
   return (
@@ -31,10 +34,31 @@ function App(): React.JSX.Element {
         </div>
 
         <div className="mt-4 flex items-center justify-between">
-          <span className="text-xs text-zinc-400">가로 (DTF 롤 고정)</span>
-          <span className="rounded-md border border-zinc-800 bg-zinc-950 px-2 py-1 text-sm tabular-nums text-zinc-200">
-            {DTF_WIDTH_CM} cm
-          </span>
+          <span className="text-xs text-zinc-400">가로 폭 (5cm 단위 · 최대 1m)</span>
+          <div className="flex items-center gap-2">
+            <span className="text-[10px] tabular-nums text-zinc-500">
+              {widthPx.toLocaleString()} px
+            </span>
+            <div className="flex items-center rounded-md border border-zinc-800 bg-zinc-950 transition-all focus-within:ring-1 focus-within:ring-indigo-500">
+              <select
+                value={widthCm}
+                onChange={(e) => setWidthCm(Number(e.target.value))}
+                className="cursor-pointer appearance-none bg-transparent px-2 py-1 pr-6 text-sm tabular-nums text-zinc-200 outline-none"
+                aria-label="문서 가로 폭 (cm)"
+              >
+                {WIDTH_PRESETS_CM.map((cm) => (
+                  <option key={cm} value={cm} className="bg-zinc-900">
+                    {cm} cm
+                  </option>
+                ))}
+              </select>
+              <ChevronDown
+                size={12}
+                strokeWidth={1.5}
+                className="pointer-events-none -ml-5 text-zinc-500"
+              />
+            </div>
+          </div>
         </div>
 
         <div className="mt-3 flex flex-col gap-1.5">

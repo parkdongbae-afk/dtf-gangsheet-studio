@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Grid3x3, TriangleAlert } from 'lucide-react'
-import { CANVAS_WIDTH_PX, cmToPx } from '../../../../core/math'
+import { cmToPx } from '../../../../core/math'
 import type { GridSource } from './placement'
 
 /** 행×열 상한 — 프록시 씬 노드 수 폭주 방지 (50×50 = 2,500개) */
@@ -10,6 +10,8 @@ const GAP_CM_MAX = 50
 interface GridDialogProps {
   /** 복제 기준 항목 — 셀 (0,0)이 이 항목의 자리가 된다 */
   item: GridSource
+  /** 문서 가로 (350 DPI px) — 결과 범위 초과 경고 기준 */
+  widthPx: number
   onConfirm: (rows: number, cols: number, gapPx: number) => void
   onClose: () => void
 }
@@ -30,7 +32,12 @@ const INPUT_CLASS =
   'w-full bg-transparent px-2 py-1.5 text-sm tabular-nums text-zinc-200 outline-none [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none'
 
 /** 그리드 복제 대화상자 (S5 세션 2) — 행×열·간격(cm)을 받아 절대 px gap으로 확정 커밋 */
-export function GridDialog({ item, onConfirm, onClose }: GridDialogProps): React.JSX.Element {
+export function GridDialog({
+  item,
+  widthPx,
+  onConfirm,
+  onClose
+}: GridDialogProps): React.JSX.Element {
   const [rowsText, setRowsText] = useState('2')
   const [colsText, setColsText] = useState('2')
   const [gapText, setGapText] = useState('1')
@@ -53,7 +60,7 @@ export function GridDialog({ item, onConfirm, onClose }: GridDialogProps): React
     w: ((cols * item.widthPx + (cols - 1) * gapPx) / 350) * 2.54,
     h: ((rows * item.heightPx + (rows - 1) * gapPx) / 350) * 2.54
   }
-  const overRoll = cols * item.widthPx + (cols - 1) * gapPx > CANVAS_WIDTH_PX
+  const overRoll = cols * item.widthPx + (cols - 1) * gapPx > widthPx
 
   return (
     <div
@@ -63,7 +70,7 @@ export function GridDialog({ item, onConfirm, onClose }: GridDialogProps): React
       <form
         className="min-w-[340px] rounded-lg border border-zinc-800 bg-zinc-900 p-4 shadow-2xl"
         role="dialog"
-        aria-label="그리드 복제"
+        aria-label="이미지 복제"
         onMouseDown={(e) => e.stopPropagation()}
         onSubmit={(e) => {
           e.preventDefault()
@@ -72,7 +79,7 @@ export function GridDialog({ item, onConfirm, onClose }: GridDialogProps): React
       >
         <div className="mb-3 flex items-center gap-2">
           <Grid3x3 size={16} strokeWidth={1.5} className="text-zinc-400" />
-          <h2 className="text-sm font-semibold text-zinc-100">그리드 복제</h2>
+          <h2 className="text-sm font-semibold text-zinc-100">이미지 복제</h2>
         </div>
         <div className="grid grid-cols-3 gap-2">
           <label className="flex flex-col gap-1">
@@ -131,7 +138,7 @@ export function GridDialog({ item, onConfirm, onClose }: GridDialogProps): React
           {extentCm.h.toFixed(1)} cm
           {overRoll && (
             <span className="inline-flex items-center gap-1 font-semibold text-red-400">
-              <TriangleAlert size={12} strokeWidth={1.5} />— 롤 폭 50cm 초과!
+              <TriangleAlert size={12} strokeWidth={1.5} />— 문서 폭 초과!
             </span>
           )}
         </p>
