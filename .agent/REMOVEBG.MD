@@ -15,11 +15,12 @@ DTF 인쇄 파이프라인 및 Python 사이드카 환경에 맞춘 배경 제�
 
 DTF 인쇄용 이미지의 배경 제거 시 고해상도 경계선 보존과 인쇄 테두리 번짐 방지가 핵심입니다.
 
-- **추천 모델 (`birefnet-general`)**:
-  - 기존 `u2net` 대비 피사체 경계면(머리카락, 텍스타일 외곽) 추출 정밀도가 월등히 높은 SOTA 모델.
-  - 고해상도 DTF 출력물에 가장 적합.
-- **경량화 폴백 모델 (`u2netp` / `isnet-general-use`)**:
-  - 메모리가 부족하거나 빠른 프리뷰 작성이 필요할 때 폴백 옵션으로 활용.
+- **기본 모델 (`isnet-general-use`)**:
+  - 품질/속도 균형형(가중치 약 170MB). 앱 번들(resources/models)에 사전 포함해 첫 실행 다운로드 없이 즉시 동작.
+- **초고정밀 옵션 (`birefnet-general`)**:
+  - 피사체 경계면(머리카락, 텍스타일 외곽) 정밀도가 월등히 높은 SOTA(약 930MB). 로딩·추론이 무거워 고정밀 작업 시 선택적 사용.
+- **최저사양 폴백 (`u2netp`)**:
+  - 약 4MB — 저사양 기기·빠른 프리뷰용.
 
 ---
 
@@ -40,7 +41,7 @@ uv add rembg[gpu]
 
 운영 환경(프로덕션 패키징)에서 사용자가 매번 모델 라이브러리를 다운로드받지 않도록 사전에 캐싱 환경변수를 고정합니다.
 
-* **환경변수 설정**: `U2NET_HOME` 설정하여 모델 가중치(`~/.u2net/birefnet-general.onnx`) 경로 지정.
+* **환경변수 설정**: `U2NET_HOME` 설정하여 모델 가중치 경로 지정 — 패키지 앱은 번들 폴더(`resources/models`, 읽기 전용), 그 외는 userData(첫 사용 시 다운로드 후 재사용).
 * **PyInstaller 번들 포함**: 빌드 시 ONNX 모델 파일이 리소스 폴더에 포함되도록 스펙 지정.
 
 ---
@@ -56,22 +57,21 @@ import numpy as np
 from PIL import Image
 from rembg import remove, new_session
 
-# 고품질 BiRefNet 세션 생성 (앱 시작 시 1회 초기화)
-bg_session = new_session("birefnet-general")
+# 기본 모델 세션 생성 (앱 구동 시 warmup 요청으로 1회 초기화)
+bg_session = new_session("isnet-general-use")
 
 def remove_background_dtf(input_image_bytes: bytes, defringe_px: int = 1) -> bytes:
     """
     JPG/PNG 입력 바이너리를 받아 배경을 제거하고,
     DTF 인쇄용 Defringe(테두리 다듬기)를 적용하여 32-bit RGBA PNG로 반환.
     """
-    # 1. Rembg를 통한 배경 제거 (알파 채널 생성)
+    # 1. Rembg를 통한 배경 제거 (알파 채널 생성) — alpha_matting=False
+    #    pymatting(CPU)은 수 GiB 단일 할당·배치 2건째 MemoryError(2026-09-03 실측)와
+    #    속도 병목의 원인. 모델 마스크를 직용하고 경계 다듬기는 apply_dtf_defringe가 담당.
     output_bytes = remove(
         input_image_bytes,
         session=bg_session,
-        alpha_matting=True, # 경계 부드럽게 다듬기
-        alpha_matting_foreground_threshold=240,
-        alpha_matting_background_threshold=10,
-        alpha_matting_erode_size=10
+        alpha_matting=False
     )
     
     # 2. PIL Image 변환
@@ -141,11 +141,12 @@ cat << 'EOF' > REMBG.MD
 
 DTF 인쇄용 이미지의 배경 제거 시 고해상도 경계선 보존과 인쇄 테두리 번짐 방지가 핵심입니다.
 
-- **추천 모델 (`birefnet-general`)**:
-  - 기존 `u2net` 대비 피사체 경계면(머리카락, 텍스타일 외곽) 추출 정밀도가 월등히 높은 SOTA 모델.
-  - 고해상도 DTF 출력물에 가장 적합.
-- **경량화 폴백 모델 (`u2netp` / `isnet-general-use`)**:
-  - 메모리가 부족하거나 빠른 프리뷰 작성이 필요할 때 폴백 옵션으로 활용.
+- **기본 모델 (`isnet-general-use`)**:
+  - 품질/속도 균형형(가중치 약 170MB). 앱 번들(resources/models)에 사전 포함해 첫 실행 다운로드 없이 즉시 동작.
+- **초고정밀 옵션 (`birefnet-general`)**:
+  - 피사체 경계면(머리카락, 텍스타일 외곽) 정밀도가 월등히 높은 SOTA(약 930MB). 로딩·추론이 무거워 고정밀 작업 시 선택적 사용.
+- **최저사양 폴백 (`u2netp`)**:
+  - 약 4MB — 저사양 기기·빠른 프리뷰용.
 
 ---
 
@@ -166,7 +167,7 @@ uv add rembg[gpu]
 
 운영 환경(프로덕션 패키징)에서 사용자가 매번 모델 라이브러리를 다운로드받지 않도록 사전에 캐싱 환경변수를 고정합니다.
 
-* **환경변수 설정**: `U2NET_HOME` 설정하여 모델 가중치(`~/.u2net/birefnet-general.onnx`) 경로 지정.
+* **환경변수 설정**: `U2NET_HOME` 설정하여 모델 가중치 경로 지정 — 패키지 앱은 번들 폴더(`resources/models`, 읽기 전용), 그 외는 userData(첫 사용 시 다운로드 후 재사용).
 * **PyInstaller 번들 포함**: 빌드 시 ONNX 모델 파일이 리소스 폴더에 포함되도록 스펙 지정.
 
 ---
@@ -182,22 +183,21 @@ import numpy as np
 from PIL import Image
 from rembg import remove, new_session
 
-# 고품질 BiRefNet 세션 생성 (앱 시작 시 1회 초기화)
-bg_session = new_session("birefnet-general")
+# 기본 모델 세션 생성 (앱 구동 시 warmup 요청으로 1회 초기화)
+bg_session = new_session("isnet-general-use")
 
 def remove_background_dtf(input_image_bytes: bytes, defringe_px: int = 1) -> bytes:
     """
     JPG/PNG 입력 바이너리를 받아 배경을 제거하고,
     DTF 인쇄용 Defringe(테두리 다듬기)를 적용하여 32-bit RGBA PNG로 반환.
     """
-    # 1. Rembg를 통한 배경 제거 (알파 채널 생성)
+    # 1. Rembg를 통한 배경 제거 (알파 채널 생성) — alpha_matting=False
+    #    pymatting(CPU)은 수 GiB 단일 할당·배치 2건째 MemoryError(2026-09-03 실측)와
+    #    속도 병목의 원인. 모델 마스크를 직용하고 경계 다듬기는 apply_dtf_defringe가 담당.
     output_bytes = remove(
         input_image_bytes,
         session=bg_session,
-        alpha_matting=True, # 경계 부드럽게 다듬기
-        alpha_matting_foreground_threshold=240,
-        alpha_matting_background_threshold=10,
-        alpha_matting_erode_size=10
+        alpha_matting=False
     )
     
     # 2. PIL Image 변환

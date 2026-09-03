@@ -19,11 +19,16 @@ import { join, extname } from 'node:path'
 import { createInterface } from 'node:readline'
 import type { ExportManifest } from '../../workers/exportManifest'
 import type { ExportProgress, ExportResult, RemoveBgSidecarResult } from '../../types/ipc'
+import { saveDefaultPath, saveLastDir } from './dialogMemory'
 
 const PING_TIMEOUT_MS = 10_000
 const SHUTDOWN_TIMEOUT_MS = 3_000
-/** 배경 제거 상한 — 첫 요청은 모델 가중치 다운로드(birefnet 약 1GB)까지 포함 */
-const REMOVE_BG_TIMEOUT_MS = 600_000
+/** 배경 제거 상한 — 기본 모델(isnet, 약 170MB)은 번들·예열되므로 여유 포함 3분 */
+const REMOVE_BG_TIMEOUT_MS = 180_000
+/** 예열 상한 — 번들이 없는 첫 개발 실행은 가중치 다운로드까지 흡수한다 */
+const WARMUP_TIMEOUT_MS = 300_000
+/** 번들 기본 모델 파일명 — export-sidecar/removebg.py DEFAULT_MODEL과 동기 */
+const DEFAULT_MODEL_FILE = 'isnet-general-use.onnx'
 /** 스폰 실패 진단용 stderr 꼬리 상한 */
 const STDERR_TAIL_CHARS = 2_000
 
@@ -81,13 +86,24 @@ class SidecarManager {
     return join(app.getAppPath(), 'export-sidecar', 'server.py')
   }
 
+  /** rembg 가중치 홈(U2NET_HOME) — 번들 모델(읽기 전용)을 우선, 없으면 userData.
+   *  rembg 2.0.81은 <home>/<model>.onnx 플랫 레이아웃(legacy)도 조회하므로
+   *  resources/models에 파일을 평평하게 번들해도 즉시 발견된다(sessions/base.py). */
+  private resolveModelsHome(): string {
+    const candidates = app.isPackaged
+      ? [join(process.resourcesPath, 'models')]
+      : [join(app.getAppPath(), 'resources', 'models')]
+    const bundled = candidates.find((dir) => existsSync(join(dir, DEFAULT_MODEL_FILE)))
+    return bundled ?? join(app.getPath('userData'), 'models')
+  }
+
   private spawnProcess(): void {
     const { command, args } = this.resolveCommand()
     const child = spawn(command, args, {
       stdio: ['pipe', 'pipe', 'pipe'],
       windowsHide: true,
-      // U2NET_HOME — rembg 모델 가중치 캐시 경로(REMOVEBG.MD §2). userData로
-      // 고정해 개발·패키지 모두 프로젝트 폴더 오염 없이 오프라인 재사용
+      // U2NET_HOME — rembg 모델 가중치 홈(REMOVEBG.MD §2). 번들 기본 모델이 있으면
+      // 그 읽기 전용 폴더, 없으면 userData(첫 사용 시 다운로드 후 오프라인 재사용)
       // PYTHONUTF8=1 — Python UTF-8 모드: 서드파티가 시스템 로캘(cp1252 등 charmap
       // 계열)로 텍스트 인코딩하는 경로까지 전부 UTF-8로 강제. 서양권 로캘 기기에서
       // 한글 경로·레이어명 렌더 시 UnicodeEncodeError(-32603)가 나던 결함 대응
@@ -95,7 +111,7 @@ class SidecarManager {
       // 로캘 인코딩까지 포괄 방어)
       env: {
         ...process.env,
-        U2NET_HOME: join(app.getPath('userData'), 'models'),
+        U2NET_HOME: this.resolveModelsHome(),
         PYTHONUTF8: '1'
       }
     })
@@ -267,6 +283,21 @@ class SidecarManager {
     }
   }
 
+  /** 사이드카 예열 — 기본 모델 세션을 미리 로딩해 첫 remove_bg 대기를 흡수.
+   *  busy를 잡지 않는다: 요청은 서버에서 순차 처리되므로 예열 도중 사용자가
+   *  배경 제거를 누르면 두 요청이 파이프라인으로 이어지고 로딩 결과를 공유한다.
+   *  실패는 무시(로그만) — 이후 요청이 요청 시 로딩으로 폴백한다. */
+  async warmup(): Promise<void> {
+    try {
+      await this.ensureStarted()
+      await this.request('warmup', undefined, WARMUP_TIMEOUT_MS)
+    } catch (err) {
+      console.error(
+        `[sidecar] 예열 실패(무시됨 — 요청 시 재시도): ${err instanceof Error ? err.message : String(err)}`
+      )
+    }
+  }
+
   /** 진행 중 렌더 취소 — 프로세스 종료로 pending 요청이 거부된다 */
   cancel(): void {
     const child = this.child
@@ -305,6 +336,11 @@ export function removeBackgroundViaSidecar(
   return sidecar.removeBg(inputPath, outputPath)
 }
 
+/** 배경 제거 예열 — index.ts가 앱 구동 직후 호출(비동기, 실패 무시) */
+export function warmupRemoveBgSidecar(): Promise<void> {
+  return sidecar.warmup()
+}
+
 export function registerExportIpc(): void {
   ipcMain.handle('export:save-dialog', async (event, format: unknown): Promise<string | null> => {
     if (format !== 'psd' && format !== 'png') {
@@ -313,13 +349,15 @@ export function registerExportIpc(): void {
     const owner = BrowserWindow.fromWebContents(event.sender)
     const options: Electron.SaveDialogOptions = {
       title: format === 'psd' ? 'PSD 내보내기' : 'PNG 내보내기',
-      defaultPath: `gangsheet.${format}`,
+      defaultPath: saveDefaultPath('export', `gangsheet.${format}`),
       filters: saveDialogFilters(format)
     }
     const result = owner
       ? await dialog.showSaveDialog(owner, options)
       : await dialog.showSaveDialog(options)
-    return result.canceled ? null : result.filePath
+    if (result.canceled || !result.filePath) return null
+    saveLastDir('export', result.filePath)
+    return result.filePath
   })
 
   ipcMain.handle('export:render', async (event, manifest: unknown): Promise<ExportResult> => {

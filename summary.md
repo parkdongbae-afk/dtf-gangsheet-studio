@@ -1,7 +1,33 @@
 # summary.md — DTF GangSheet Studio 진행 상황
-갱신: 2026-09-03 / 완료: 방향키 이동(mm)·Ctrl 드래그 복제·그룹·우클릭 메뉴(정렬 포함) / 이전: v0.2.1 — .dtf 저장 소수 치수 검증 결함 수정
+갱신: 2026-09-03 / 완료: 배경 제거 속도 최적화(alpha_matting off·isnet 기본 모델 번들·예열·개별 완료 즉시 반영) / 이전: 방향키 이동(mm)·Ctrl 드래그 복제·그룹·우클릭 메뉴(정렬 포함)
 
 ## 현재 상태
+- **배경 제거 속도 최적화 (2026-09-03 요청 — 첫 실행 병목·처리 지연 접수)**:
+  - **alpha_matting=False**: pymatting(CPU)은 수 GiB 단일 할당·배치 2건째
+    MemoryError(2026-09-03 실측)·이미지간 엣지 품질 비일관(메모리 압박 시 1장만
+    마팅)의 원인 — MemoryError 폴백 이중 경로 통째로 제거, 모델 마스크 직용 1회
+    호출로 단순화. 경계는 기존 apply_dtf_defringe(erode) 유지.
+  - **기본 모델 isnet-general-use**(170MB) — birefnet-general(930MB)은 초고정밀
+    옵션 후보로 FALLBACK_MODELS로. rembg 2.0.81 세션명 검증 완료(dis_general_use).
+  - **모델 사전 번들**: resources/models/<model>.onnx 플랫 레이아웃(rembg 2.0.81
+    legacy_home 플랫 조회 확인 — sessions/base.py). electron-builder
+    extraResources(resources/models→models), export.ts resolveModelsHome()이
+    번들 우선→userData 폴백. 확보: scripts/fetch-models.ps1(신규, rembg 공식
+    릴리스에서 1회 다운로드), .onnx는 .gitignore(GitHub 100MB 한도).
+  - **사이드카 예열**: server.py warmup 메서드(신규, get_session만 수행·실패는
+    INVALID_PARAMS로 요청 시 로딩 폴백) + index.ts 앱 구동 직후 호출(스모크·
+    E2E 환경 제외). warmup은 busy 미획득 — 서버 순차 처리라 예열 중 클릭이면
+    요청이 파이프라인으로 이어져 로딩 결과 공유. REMOVE_BG_TIMEOUT_MS
+    600s→180s(번들+예열 전제).
+  - **개별 완료 즉시 반영**: handleRemoveBg 완료분을 setImages(히스토리 미기록)로
+    즉시 캔버스 반영, 배치 종료 후 commitImages 1회(undo 기준=시작 씬) — 기존
+    "배치 전체 undo 1단계" 계약 보존. PropertiesPanel 진행률 "처리 중 (n/N)…"
+    표기(신규 removeProgress prop), 안내문 갱신(다운로드 문구 제거).
+  - **검증**: pytest 83(신규 6 — no-matting 회귀·warmup 디스패치 4종) · ruff 0 ·
+    pyright 0 · Vitest 189 · lint 0 · typecheck 0 · `npm run build` ok ·
+    **실모델 E2E**: U2NET_HOME=번들 경로에서 warmup 4.0s→remove_bg 3.9s
+    (1200×900, 다운로드 없음) — 출력 RGBA·투명 픽셀 86만 확인.
+  - 커밋·푸시는 사용자 요청 전 보류(이전 세션분도 미커밋 상태).
 - **키보드 이동·Ctrl 드래그 복제·그룹·우클릭 메뉴 (2026-09-03 요청)**:
   - **방향키 이동**: 기본 5mm(350DPI mmToPx 반올림 없음), Shift+방향키=1mm 미세,
     하단 힌트바 스텝퍼로 1~50mm 1mm 단위 조절. 연속 누름은 900ms 창 coalesce로

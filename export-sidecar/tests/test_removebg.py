@@ -98,11 +98,11 @@ def test_get_session_creates_once_per_model(
     assert created == ["stub-a", "stub-b"]  # new_session 호출 = 모델 수
 
 
-def test_remove_background_oom_falls_back_to_no_matting(
+def test_remove_background_uses_raw_mask_without_matting(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """배치 연속 처리 OOM 회귀(2026-09-03 실측) — alpha_matting MemoryError 시
-    마팅 없는 경로로 재시도해 배치가 중단 없이 완료된다."""
+    """alpha_matting 미사용 회귀 — pymatting(OOM·속도 병목, 2026-09-03 실측)을
+    끄고 모델 마스크를 직용한다. remove()는 정확히 1회, matting=False로 호출."""
     import io
 
     calls: list[bool] = []
@@ -111,8 +111,6 @@ def test_remove_background_oom_falls_back_to_no_matting(
         _data: bytes, *, session: BaseSession, alpha_matting: bool, **_kw: object
     ) -> bytes:
         calls.append(alpha_matting)
-        if alpha_matting:
-            raise MemoryError("Unable to allocate 1.86 GiB")
         buffer = io.BytesIO()
         Image.new("RGBA", (8, 8), (9, 8, 7, 255)).save(buffer, format="PNG")
         return buffer.getvalue()
@@ -123,8 +121,61 @@ def test_remove_background_oom_falls_back_to_no_matting(
         b"stub", session=BaseSession.__new__(BaseSession)
     )
 
-    assert calls == [True, False]  # 마팅 시도 → OOM → 비마팅 재시도
+    assert calls == [False]  # 마팅 없는 단일 경로
     assert result.width_px == 8 and result.height_px == 8
+
+
+# --- 서버 warmup 디스패치 (예열 — 기본 모델 사전 로딩) ---
+
+
+def test_warmup_loads_default_model_session(monkeypatch: pytest.MonkeyPatch) -> None:
+    loaded: list[str] = []
+
+    def fake_get_session(model: str) -> BaseSession:
+        loaded.append(model)
+        return BaseSession.__new__(BaseSession)
+
+    monkeypatch.setattr(removebg, "get_session", fake_get_session)
+
+    response = server.handle_message(_rpc("warmup", {}))
+
+    assert response is not None
+    assert "error" not in response
+    assert response["result"] == {"status": "ready", "model": removebg.DEFAULT_MODEL}
+    assert loaded == [removebg.DEFAULT_MODEL]
+
+
+def test_warmup_without_params_uses_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        removebg, "get_session", lambda _model: BaseSession.__new__(BaseSession)
+    )
+    response = server.handle_message({"jsonrpc": "2.0", "id": 1, "method": "warmup"})
+    assert response is not None
+    assert "error" not in response
+
+
+@pytest.mark.parametrize("params", ["not-object", {"model": ""}, {"model": 3}])
+def test_warmup_invalid_params_maps_to_32602(params: object) -> None:
+    response = server.handle_message(_rpc("warmup", params))
+    assert response is not None
+    error = response["error"]
+    assert isinstance(error, dict)
+    assert error["code"] == server.INVALID_PARAMS
+
+
+def test_warmup_model_load_failure_maps_to_32602(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def boom(_model: str) -> BaseSession:
+        raise RuntimeError("weights unavailable")
+
+    monkeypatch.setattr(removebg, "get_session", boom)
+    response = server.handle_message(_rpc("warmup", {}))
+    assert response is not None
+    error = response["error"]
+    assert isinstance(error, dict)
+    assert error["code"] == server.INVALID_PARAMS
+    assert "weights unavailable" in str(error["message"])
 
 
 # --- 서버 remove_bg 디스패치 (경로 계약 — STDIO_GUIDE) ---

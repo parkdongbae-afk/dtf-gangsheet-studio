@@ -248,8 +248,12 @@ export function ProxyCanvas({
   const [checkerBg, setCheckerBg] = useState(false)
   /** 휠 클릭(중앙 버튼) 드래그 팬 진행 중 — 커서 표시용 */
   const [panning, setPanning] = useState(false)
-  /** 배경 제거 진행 중 — 사이드카 추론(첫 요청은 모델 다운로드 포함) 동안 버튼 잠금 */
+  /** 배경 제거 진행 중 — 사이드카 추론 동안 버튼 잠금 */
   const [removeBusy, setRemoveBusy] = useState(false)
+  /** 배경 제거 배치 진행률 — 완료 즉시 캔버스에 반영되므로 n/N로 표기 */
+  const [removeProgress, setRemoveProgress] = useState<{ current: number; total: number } | null>(
+    null
+  )
   /** 드래그 스냅 오버레이 — 가이드 라인·간격 라벨 (드래그 중에만 존재) */
   const [snapOverlay, setSnapOverlay] = useState<{
     guides: SnapGuide[]
@@ -1279,8 +1283,10 @@ export function ProxyCanvas({
 
   /**
    * 배경 제거(v2) — 선택 항목 전체(단일·다중)를 순차 처리해 RGBA PNG로 에셋 치환.
-   * 시작 시점의 id·경로를 캡처해 처리 중 선택이 바뀌어도 올바른 항목을 갱신하고,
-   * 성공분은 한 번의 히스토리 커밋으로 반영해 배치 전체가 undo 1단계로 되돌려진다.
+   * 시작 시점의 id·경로를 캡처해 처리 중 선택이 바뀌어도 올바른 항목을 갱신한다.
+   * 완료분은 setImages로 즉시 캔버스에 반영(히스토리 미기록 — 대기 없는 순차 표시),
+   * 히스토리 커밋은 배치 전체를 마친 뒤 1회(undo 기준 = 시작 시점 씬)로 유지해
+   * 배치 전체가 undo 1단계로 되돌려지는 기존 계약을 보존한다.
    * 치환 정책상 내보내기 파이프라인은 무수정 재사용된다(알파→백색 잉크 마스크).
    */
   const handleRemoveBg = useCallback((): void => {
@@ -1289,16 +1295,24 @@ export function ProxyCanvas({
       .map((img) => ({ id: img.id, filePath: img.filePath }))
     if (targets.length === 0 || removeBusy) return
     setRemoveBusy(true)
+    setRemoveProgress({ current: 0, total: targets.length })
     void (async (): Promise<void> => {
       const done: Array<{ id: string; filePath: string; dataUrl: string }> = []
       const failures: string[] = []
-      for (const target of targets) {
+      for (const [index, target] of targets.entries()) {
         try {
           const result = await window.api.removeBackground(target.filePath)
-          done.push({ id: target.id, filePath: result.filePath, dataUrl: result.dataUrl })
+          const entry = {
+            id: target.id,
+            filePath: result.filePath,
+            dataUrl: result.dataUrl
+          }
+          done.push(entry)
+          setImages((prev) => prev.map((img) => (img.id === entry.id ? { ...img, ...entry } : img)))
         } catch (err) {
           failures.push(err instanceof Error ? err.message : String(err))
         }
+        setRemoveProgress({ current: index + 1, total: targets.length })
       }
       if (done.length > 0) {
         const doneById = new Map(done.map((entry) => [entry.id, entry]))
@@ -1310,11 +1324,12 @@ export function ProxyCanvas({
         )
       }
       setRemoveBusy(false)
+      setRemoveProgress(null)
       if (failures.length > 0) {
         alert(`배경 제거 실패 ${failures.length}/${targets.length}건:\n${failures.join('\n')}`)
       }
     })()
-  }, [images, selectedIds, removeBusy, commitImages])
+  }, [images, selectedIds, removeBusy, setImages, commitImages])
 
   /** 경로들을 기준점 중심에 캐스케이드 배치해 씬에 추가 */
   const importPaths = useCallback(
@@ -1825,6 +1840,7 @@ export function ProxyCanvas({
         onOpenGrid={() => setGridOpen(true)}
         onRemoveBg={handleRemoveBg}
         removeBusy={removeBusy}
+        removeProgress={removeProgress}
         onOpenBgSites={() => setBgSitesOpen(true)}
       />
     </div>

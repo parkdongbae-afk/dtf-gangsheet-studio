@@ -50,6 +50,8 @@ export interface PropertiesPanelProps {
   onOpenGrid: () => void
   onRemoveBg: () => void
   removeBusy: boolean
+  /** 배경 제거 배치 진행률 — 처리 중 n/N 표기(완료분은 캔버스에 즉시 반영) */
+  removeProgress: { current: number; total: number } | null
   /** 배경 제거 사이트 다이얼로그 열기 */
   onOpenBgSites: () => void
 }
@@ -197,11 +199,17 @@ export function PropertiesPanel({
   onOpenGrid,
   onRemoveBg,
   removeBusy,
+  removeProgress,
   onOpenBgSites
 }: PropertiesPanelProps): React.JSX.Element {
   const [linked, setLinked] = useState(true)
   const multi = !item && multiSelectedCount >= 2
   const canDistribute = multiSelectedCount >= 3
+  /** 진행 중 라벨 — 배치면 n/N, 단일이면 스피너만 */
+  const removeBusyLabel =
+    removeProgress && removeProgress.total > 1
+      ? `처리 중 (${removeProgress.current}/${removeProgress.total})…`
+      : '처리 중…'
 
   const commitWidth = (valueCm: number): void => {
     if (!item || valueCm <= 0) return
@@ -349,11 +357,11 @@ export function PropertiesPanel({
               ) : (
                 <Eraser size={ICON.size} strokeWidth={ICON.strokeWidth} />
               )}
-              {removeBusy ? '처리 중…' : `배경 제거 (${multiSelectedCount}개)`}
+              {removeBusy ? removeBusyLabel : `배경 제거 (${multiSelectedCount}개)`}
             </button>
             <p className="mt-2 text-[10px] leading-relaxed text-zinc-500">
-              선택 {multiSelectedCount}개를 한 번에 순차 처리해 배경을 투명하게 만듭니다. 전체가 한
-              단계로 Ctrl+Z 복구되며, 처리된 항목도 내보내기는 기존과 동일하게 동작합니다.
+              선택 {multiSelectedCount}개를 순차 처리해 배경을 투명하게 만듭니다. 완료된 항목은 즉시
+              캔버스에 반영되고 전체가 한 단계로 Ctrl+Z 복구됩니다.
             </p>
             <button
               type="button"
@@ -559,11 +567,11 @@ export function PropertiesPanel({
               ) : (
                 <Eraser size={ICON.size} strokeWidth={ICON.strokeWidth} />
               )}
-              {removeBusy ? '처리 중…' : '배경 제거'}
+              {removeBusy ? removeBusyLabel : '배경 제거'}
             </button>
             <p className="mt-2 text-[10px] leading-relaxed text-zinc-500">
-              AI 누끼로 배경을 투명하게 제거합니다. 첫 사용 시 모델 다운로드(약 1GB) 후 오프라인
-              동작하며, 처리 중 잠시 멈출 수 있습니다. Ctrl+Z로 되돌릴 수 있습니다.
+              AI 누끼로 배경을 투명하게 제거합니다. 기본 모델은 앱에 포함되어 있어 첫 사용부터
+              오프라인으로 즉시 동작합니다. Ctrl+Z로 되돌릴 수 있습니다.
             </p>
             <button
               type="button"

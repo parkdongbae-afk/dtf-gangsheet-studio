@@ -3,7 +3,7 @@ import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
 import { registerImageImportIpc } from './ipc/imageImport'
-import { registerExportIpc, runExportTestHook } from './ipc/export'
+import { registerExportIpc, runExportTestHook, warmupRemoveBgSidecar } from './ipc/export'
 import { registerRemoveBgIpc } from './ipc/removeBg'
 import { registerGuidePdfIpc } from './ipc/openGuidePdf'
 import { registerProjectIpc } from './ipc/projectFile'
@@ -70,6 +70,13 @@ app.whenReady().then(() => {
   registerProjectIpc()
 
   createWindow()
+
+  // 배경 제거 예열 — 사용자가 버튼을 누르기 전에 백그라운드에서 기본 모델을
+  // 로딩해 첫 요청 대기(모델 로딩·경우따라 다운로드)를 앱 구동 시점으로 흡수.
+  // 실패는 무시되고 요청 시 로딩으로 폴백한다(export.ts warmup).
+  if (!process.env.DTF_SMOKE_TEST && !process.env.DTF_EXPORT_TEST) {
+    void warmupRemoveBgSidecar()
+  }
 
   // E2E 내보내기 자동검증(DTF_EXPORT_TEST=매니페스트 경로) — 렌더 후 자동 종료
   void runExportTestHook()

@@ -1,39 +1,35 @@
 # DTF GangSheet Studio 루트 .gitignore
 # WORKFLOW.md §6 무시 목록 + CLOUD.md §3.1 대용량 에셋 보호 병합
-
 # Node
 node_modules/
 .eslintcache
 .playwright-mcp/
 *.tsbuildinfo
-
 # 빌드 산출물 (electron-vite out/ · electron-builder release/ · PyInstaller export-sidecar/dist)
 out/
 release/
 dist/
 export-sidecar/build/
-
 # Python
 .venv/
 __pycache__/
 *.py[cod]
 .pytest_cache/
 .ruff_cache/
-
 # 임시·로그
 tmp/
 logs/
-
 # 대용량 테스트 에셋 (GitHub 미동기 — 클라우드 드라이브에서 관리, CLOUD.md §3)
 assets/test-highres/*
 !assets/test-highres/.gitkeep
 *.psd
 *.tiff
-
 # 환경 변수
 .env
 .env.local
-
 # 로컬 AI 도구 상태 (GitHub 동기화 제외 목적)
 .omo/
 .codegraph/
+
+# 배경 제거 모델 가중치(170MB, GitHub 100MB 한도 초과) — scripts/fetch-models.ps1로 확보
+resources/models/*.onnx

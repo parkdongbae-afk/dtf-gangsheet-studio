@@ -33,18 +33,15 @@ from PIL import Image, UnidentifiedImageError
 if TYPE_CHECKING:
     from rembg.sessions import BaseSession
 
-# 추천 기본 모델 — u2net 대비 경계면(머리카락·텍스타일 외곽) 정밀도가 월등한 SOTA (REMOVEBG.MD §1)
-DEFAULT_MODEL: str = "birefnet-general"
-# 경량 폴백 후보(빠른 프리뷰·저메모리): "u2netp", "isnet-general-use"
-FALLBACK_MODELS: tuple[str, ...] = ("u2netp", "isnet-general-use")
+# 기본 모델 — 품질/속도 균형형(가중치 약 170MB). birefnet-general(약 930MB)은
+# 경계 정밀도가 더 높지만 로딩·추론이 무거워 초고정밀 옵션용으로 남긴다(REMOVEBG.MD §1).
+# 앱은 isnet-general-use.onnx를 resources/models에 사전 번들해 첫 실행 다운로드를 없앤다.
+DEFAULT_MODEL: str = "isnet-general-use"
+# 대체 후보 — 초고정밀 "birefnet-general", 최저사양(약 4MB) "u2netp"
+FALLBACK_MODELS: tuple[str, ...] = ("birefnet-general", "u2netp")
 
 # 기본 Defringe 강도(px) — 0이면 후처리 생략
 DEFAULT_DEFRINGE_PX: int = 1
-
-# alpha_matting 파라미터 (REMOVEBG.MD §3 스펙값 그대로)
-ALPHA_MATTING_FOREGROUND_THRESHOLD: int = 240
-ALPHA_MATTING_BACKGROUND_THRESHOLD: int = 10
-ALPHA_MATTING_ERODE_SIZE: int = 10
 
 # PNG 압축 레벨 — 속도 우선(검수·재편집용 산출물, 무손실은 PNG 자체가 보장)
 PNG_COMPRESS_LEVEL: int = 1
@@ -87,39 +84,23 @@ def remove_background_dtf(
 ) -> RemoveBgResult:
     """입력 이미지 바이너리 → 배경 제거 + Defringe → 32-bit RGBA PNG 결과.
 
-    alpha_matting으로 경계를 부드럽게 다듬고(REMOVEBG.MD §3 스펙 파라미터),
-    이후 알파 경계를 ``defringe_px``만큼 침식시켜 흰색 테두리를 제거한다.
+    모델 마스크를 그대로 사용한다(alpha_matting=False) — CPU pymatting은
+    트림맵 미지정 픽셀 수에 비례한 수 GiB 단일 할당을 요구해 배치 2건째부터
+    MemoryError가 실측되었고(2026-09-03 일괄 처리 E2E), 메모리 압박에 따라
+    이미지마다 엣지 품질이 달라지는 비일관성까지 있었다. DTF 전사 경계는
+    ``apply_dtf_defringe`` 침식으로 다듬는다(처리 속도·품질 일관).
     고해상도 처리 직후 ``del`` + ``gc.collect()``로 메모리 피크를 수거한다(§5).
-
-    CPU alpha_matting(pymatting)은 트림맵 미지정 픽셀 수에 비례해 수 GiB 단일
-    할당을 요구할 수 있어, 세션이 상주한 연속 처리(배치) 2건째부터 MemoryError가
-    실측되었다(2026-09-03 일괄 처리 E2E). OOM 시에만 alpha_matting을 끈 경로
-    (모델 마스크 직용)로 재시도해 배치가 중단 없이 이어지게 한다.
     """
     from rembg import remove
 
-    def run(alpha_matting: bool) -> bytes:
-        raw: object = remove(
-            input_bytes,
-            session=session,
-            alpha_matting=alpha_matting,
-            alpha_matting_foreground_threshold=ALPHA_MATTING_FOREGROUND_THRESHOLD,
-            alpha_matting_background_threshold=ALPHA_MATTING_BACKGROUND_THRESHOLD,
-            alpha_matting_erode_size=ALPHA_MATTING_ERODE_SIZE,
-        )
-        # rembg remove()의 반환 어노테이션은 입력 타입별 유니온 — bytes 입력은 bytes 반환
-        if not isinstance(raw, bytes):
-            raise RemoveBgError(f"unexpected rembg output type: {type(raw).__name__}")
-        return raw
-
     try:
-        try:
-            raw = run(alpha_matting=True)
-        except MemoryError:
-            raw = run(alpha_matting=False)
+        raw: object = remove(input_bytes, session=session, alpha_matting=False)
     except (UnidentifiedImageError, ValueError, OSError) as exc:
         # 디코딩 불가 입력 — 클라이언트 문제(INVALID_PARAMS)로 분류
         raise RemoveBgError(f"cannot decode input image: {exc}") from exc
+    # rembg remove()의 반환 어노테이션은 입력 타입별 유니온 — bytes 입력은 bytes 반환
+    if not isinstance(raw, bytes):
+        raise RemoveBgError(f"unexpected rembg output type: {type(raw).__name__}")
     img = Image.open(io.BytesIO(raw)).convert("RGBA")
     del raw  # 원본·rembg 출력 버퍼 이중 상태 해소
 

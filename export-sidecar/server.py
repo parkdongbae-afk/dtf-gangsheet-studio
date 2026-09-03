@@ -24,6 +24,9 @@
   (removebg.py, v2). STDIO_GUIDE에 따라 **경로만 주고받는다** — 스펙
   (REMOVEBG.MD §4)의 Base64 스트리밍은 프로젝트 stdio 바이너리 금지
   철칙에 위배되어 경로 계약으로 조정. 첫 요청 시에만 모델 세션을 로딩한다.
+- ``warmup``: params = ``{model?}`` → 기본 모델 세션을 미리 로딩해 첫
+  remove_bg 요청의 로딩 대기(수 초~수 분)를 앱 구동 시점으로 흡수한다.
+  실패는 INVALID_PARAMS로 응답해 클라이언트가 요청 시 로딩으로 폴백하게 한다.
 - ``shutdown``: 정상 응답 후 프로세스 종료
 
 베어 매니페스트 모드: ``method`` 없이 ``output_path``가 있는 객체 한 줄을
@@ -133,6 +136,8 @@ def _dispatch(
             result = _render_manifest(message.get("params"), notifier)
         elif method == "remove_bg":
             result = _remove_bg(message.get("params"))
+        elif method == "warmup":
+            result = _warmup(message.get("params"))
         elif method == "shutdown":
             result = {"status": "bye"}
         else:
@@ -209,6 +214,29 @@ def _remove_bg(params: object) -> dict[str, object]:
         "width_px": result.width_px,
         "height_px": result.height_px,
     }
+
+
+def _warmup(params: object) -> dict[str, object]:
+    """warmup 메서드 본문 — 모델 세션을 미리 로딩만 수행(파일 부작용 없음).
+
+    모델명 검증·로딩 실패는 RemoveBgError(INVALID_PARAMS)로 매핑해 클라이언트가
+    예열 실패를 무시하고 요청 시 로딩 경로로 폴백할 수 있게 한다.
+    """
+    model = removebg.DEFAULT_MODEL
+    if params is not None:
+        if not isinstance(params, Mapping):
+            raise RemoveBgError("'params' must be an object (warmup request)")
+        model = params.get("model", removebg.DEFAULT_MODEL)
+        if not isinstance(model, str) or not model:
+            raise RemoveBgError("'model' must be a non-empty string")
+
+    _log(f"warmup start: model={model}")
+    try:
+        removebg.get_session(model)
+    except Exception as exc:  # 모델명 오류·가중치 로딩 실패 — 안내 가능한 입력 문제
+        raise RemoveBgError(f"model load failed ({model}): {type(exc).__name__}: {exc}") from exc
+    _log("warmup done")
+    return {"status": "ready", "model": model}
 
 
 def _respond(request_id: object, result: dict[str, object]) -> dict[str, object]:

@@ -22,6 +22,11 @@ asarUnpack:
 extraResources:
   - from: export-sidecar/dist/dtf-sidecar.exe
     to: dtf-sidecar/dtf-sidecar.exe
+  # 배경 제거 기본 모델 가중치(약 170MB) — 런타임 U2NET_HOME=<resources>/models
+  # (export.ts). rembg가 <home>/<model>.onnx 플랫 레이아웃으로 조회한다.
+  # 파일은 scripts/fetch-models.ps1로 사전 확보(없으면 이 디렉터리는 빈 채 번들됨).
+  - from: resources/models
+    to: models
   # 속성 패널 "포토샵 클라우드 가이드" 버튼용 PDF — 리소스 루트에 배치, openPath로 열림
   - from: resources/photoshop_cloud_guide.pdf
     to: photoshop_cloud_guide.pdf
