@@ -34,7 +34,7 @@ function App(): React.JSX.Element {
         </div>
 
         <div className="mt-4 flex items-center justify-between">
-          <span className="text-xs text-zinc-400">가로 폭 (5cm 단위 · 최대 1m)</span>
+          <span className="text-xs text-zinc-400">가로 폭 (1cm 단위 · 최대 1m)</span>
           <div className="flex items-center gap-2">
             <span className="text-[10px] tabular-nums text-zinc-500">
               {widthPx.toLocaleString()} px
