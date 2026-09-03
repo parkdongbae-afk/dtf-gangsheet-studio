@@ -32,6 +32,19 @@ export const HEIGHT_PRESETS_M = [1, 2] as const
 
 export type HeightPresetM = (typeof HEIGHT_PRESETS_M)[number]
 
+/** 고정 규격 시트 프리셋 — 일부 DTF 인쇄 업체가 A4/A3 규격을 요구한다 */
+export interface FixedSheetPreset {
+  id: 'a4' | 'a3'
+  label: string
+  widthCm: number
+  heightCm: number
+}
+
+export const FIXED_SHEET_PRESETS: readonly FixedSheetPreset[] = [
+  { id: 'a4', label: 'A4', widthCm: 21, heightCm: 29.7 },
+  { id: 'a3', label: 'A3', widthCm: 29.7, heightCm: 42 }
+] as const
+
 /** cm → px 환산 (반올림). 모든 내부 수치는 350 DPI 절대 픽셀 기준. */
 export function cmToPx(cm: number, dpi: number = 350): number {
   return Math.round((cm / 2.54) * dpi)

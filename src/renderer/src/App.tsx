@@ -2,10 +2,13 @@ import { useCallback, useEffect, useState } from 'react'
 import { ChevronDown, FilePlus2, FolderOpen } from 'lucide-react'
 import {
   DTF_WIDTH_CM,
+  FIXED_SHEET_PRESETS,
   HEIGHT_PRESETS_M,
   WIDTH_PRESETS_CM,
+  cmToPx,
   getCanvasHeightPx,
   getCanvasWidthPx,
+  type FixedSheetPreset,
   type HeightPresetM
 } from '../../core/math'
 import { ProxyCanvas, type PlacedImage } from './components/canvas/ProxyCanvas'
@@ -21,6 +24,9 @@ interface DocumentSession {
   fileName: string | null
 }
 
+/** 새 문서 규격 선택 — 롤(폭×길이) 또는 고정 시트(A4/A3) */
+type SheetKind = 'roll' | FixedSheetPreset['id']
+
 const fileBaseName = (filePath: string): string =>
   filePath
     .split(/[\\/]/)
@@ -28,12 +34,15 @@ const fileBaseName = (filePath: string): string =>
     ?.replace(/\.[^.]+$/, '') ?? filePath
 
 function App(): React.JSX.Element {
+  const [sheetKind, setSheetKind] = useState<SheetKind>('roll')
   const [widthCm, setWidthCm] = useState<number>(DTF_WIDTH_CM)
   const [heightM, setHeightM] = useState<HeightPresetM>(1)
   const [doc, setDoc] = useState<DocumentSession | null>(null)
 
-  const widthPx = getCanvasWidthPx(widthCm)
-  const heightPx = getCanvasHeightPx(heightM)
+  const fixedPreset =
+    sheetKind === 'roll' ? null : (FIXED_SHEET_PRESETS.find((p) => p.id === sheetKind) ?? null)
+  const widthPx = fixedPreset ? cmToPx(fixedPreset.widthCm) : getCanvasWidthPx(widthCm)
+  const heightPx = fixedPreset ? cmToPx(fixedPreset.heightCm) : getCanvasHeightPx(heightM)
 
   /** .dtf 프로젝트 열기 — 프리뷰 재생성(hydrate) 후 세션 교체 (새 문서 만들기와 동일 경로) */
   const openProjectFromDisk = useCallback(async (pathOverride?: string): Promise<void> => {
@@ -94,6 +103,21 @@ function App(): React.JSX.Element {
     )
   }
 
+  const sheetTab = (kind: SheetKind, label: string): React.JSX.Element => (
+    <button
+      key={kind}
+      type="button"
+      onClick={() => setSheetKind(kind)}
+      className={`flex-1 rounded-md border px-2 py-1.5 text-xs font-medium transition-colors ${
+        sheetKind === kind
+          ? 'border-indigo-500 bg-indigo-500/15 text-indigo-300'
+          : 'border-zinc-800 bg-zinc-950 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200'
+      }`}
+    >
+      {label}
+    </button>
+  )
+
   return (
     <main className="flex min-h-screen items-center justify-center bg-zinc-950 p-8">
       <div className="w-[420px] rounded-lg border border-zinc-800 bg-zinc-900 p-5 shadow-2xl">
@@ -105,70 +129,93 @@ function App(): React.JSX.Element {
           </div>
         </div>
 
-        <div className="mt-4 flex items-center justify-between">
-          <span className="text-xs text-zinc-400">가로 폭 (1cm 단위 · 최대 1m)</span>
-          <div className="flex items-center gap-2">
-            <span className="text-[10px] tabular-nums text-zinc-500">
-              {widthPx.toLocaleString()} px
-            </span>
-            <div className="flex items-center rounded-md border border-zinc-800 bg-zinc-950 transition-all focus-within:ring-1 focus-within:ring-indigo-500">
-              <select
-                value={widthCm}
-                onChange={(e) => setWidthCm(Number(e.target.value))}
-                className="cursor-pointer appearance-none bg-transparent px-2 py-1 pr-6 text-sm tabular-nums text-zinc-200 outline-none"
-                aria-label="문서 가로 폭 (cm)"
-              >
-                {WIDTH_PRESETS_CM.map((cm) => (
-                  <option key={cm} value={cm} className="bg-zinc-900">
-                    {cm} cm
-                  </option>
-                ))}
-              </select>
-              <ChevronDown
-                size={12}
-                strokeWidth={1.5}
-                className="pointer-events-none -ml-5 text-zinc-500"
-              />
-            </div>
-          </div>
+        <div className="mt-4 flex gap-1.5">
+          {sheetTab('roll', '롤 (강시트)')}
+          {sheetTab('a4', 'A4')}
+          {sheetTab('a3', 'A3')}
         </div>
 
-        <div className="mt-3 flex flex-col gap-1.5">
-          <span className="text-[10px] font-medium uppercase tracking-wide text-zinc-500">
-            세로 길이
-          </span>
-          <div className="grid grid-cols-2 gap-2">
-            {HEIGHT_PRESETS_M.map((meters) => (
-              <label key={meters} className="cursor-pointer">
-                <input
-                  type="radio"
-                  name="height"
-                  checked={heightM === meters}
-                  onChange={() => setHeightM(meters)}
-                  className="sr-only"
-                />
-                <div
-                  className={`flex flex-col gap-0.5 rounded-md border p-2.5 transition-colors ${
-                    heightM === meters
-                      ? 'border-indigo-500 bg-indigo-500/15'
-                      : 'border-zinc-800 bg-zinc-950 hover:bg-zinc-800'
-                  }`}
-                >
-                  <span
-                    className={`text-sm font-semibold tabular-nums ${
-                      heightM === meters ? 'text-indigo-300' : 'text-zinc-200'
-                    }`}
-                  >
-                    {meters} m
-                  </span>
-                  <span className="text-[10px] tabular-nums text-zinc-500">
-                    {getCanvasHeightPx(meters).toLocaleString()} px
-                  </span>
-                </div>
-              </label>
-            ))}
+        {fixedPreset ? (
+          <div className="mt-4 rounded-md border border-zinc-800 bg-zinc-950 p-3">
+            <div className="flex items-baseline justify-between">
+              <span className="text-sm font-semibold text-zinc-100">{fixedPreset.label}</span>
+              <span className="text-xs tabular-nums text-zinc-400">
+                {fixedPreset.widthCm} × {fixedPreset.heightCm} cm
+              </span>
+            </div>
+            <span className="text-[10px] tabular-nums text-zinc-500">
+              {cmToPx(fixedPreset.widthCm).toLocaleString()} ×{' '}
+              {cmToPx(fixedPreset.heightCm).toLocaleString()} px
+            </span>
           </div>
-        </div>
+        ) : (
+          <>
+            <div className="mt-4 flex items-center justify-between">
+              <span className="text-xs text-zinc-400">가로 폭 (1cm 단위 · 최대 1m)</span>
+              <div className="flex items-center gap-2">
+                <span className="text-[10px] tabular-nums text-zinc-500">
+                  {widthPx.toLocaleString()} px
+                </span>
+                <div className="flex items-center rounded-md border border-zinc-800 bg-zinc-950 transition-all focus-within:ring-1 focus-within:ring-indigo-500">
+                  <select
+                    value={widthCm}
+                    onChange={(e) => setWidthCm(Number(e.target.value))}
+                    className="cursor-pointer appearance-none bg-transparent px-2 py-1 pr-6 text-sm tabular-nums text-zinc-200 outline-none"
+                    aria-label="문서 가로 폭 (cm)"
+                  >
+                    {WIDTH_PRESETS_CM.map((cm) => (
+                      <option key={cm} value={cm} className="bg-zinc-900">
+                        {cm} cm
+                      </option>
+                    ))}
+                  </select>
+                  <ChevronDown
+                    size={12}
+                    strokeWidth={1.5}
+                    className="pointer-events-none -ml-5 text-zinc-500"
+                  />
+                </div>
+              </div>
+            </div>
+
+            <div className="mt-3 flex flex-col gap-1.5">
+              <span className="text-[10px] font-medium uppercase tracking-wide text-zinc-500">
+                세로 길이
+              </span>
+              <div className="grid grid-cols-2 gap-2">
+                {HEIGHT_PRESETS_M.map((meters) => (
+                  <label key={meters} className="cursor-pointer">
+                    <input
+                      type="radio"
+                      name="height"
+                      checked={heightM === meters}
+                      onChange={() => setHeightM(meters)}
+                      className="sr-only"
+                    />
+                    <div
+                      className={`flex flex-col gap-0.5 rounded-md border p-2.5 transition-colors ${
+                        heightM === meters
+                          ? 'border-indigo-500 bg-indigo-500/15'
+                          : 'border-zinc-800 bg-zinc-950 hover:bg-zinc-800'
+                      }`}
+                    >
+                      <span
+                        className={`text-sm font-semibold tabular-nums ${
+                          heightM === meters ? 'text-indigo-300' : 'text-zinc-200'
+                        }`}
+                      >
+                        {meters} m
+                      </span>
+                      <span className="text-[10px] tabular-nums text-zinc-500">
+                        {getCanvasHeightPx(meters).toLocaleString()} px
+                      </span>
+                    </div>
+                  </label>
+                ))}
+              </div>
+            </div>
+          </>
+        )}
 
         <div className="mt-5 flex gap-2">
           <button
