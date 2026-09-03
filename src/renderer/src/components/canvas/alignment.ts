@@ -15,7 +15,8 @@ export interface BBox {
   bottom: number
 }
 
-/** PlacedImage를 구조적으로 만족하는 최소 입력 */
+/** PlacedImage를 구조적으로 만족하는 최소 입력 — groupId를 공유하는 항목은 정렬·분배에서
+ *  하나의 원자 유닛으로 취급된다 (Figma 관례: 그룹 내부 상대 위치 불변). */
 export interface AlignableItem {
   id: string
   x: number
@@ -23,6 +24,8 @@ export interface AlignableItem {
   widthPx: number
   heightPx: number
   rotation: number
+  /** 선택적 그룹 식별자 — 같은 groupId를 공유하는 항목이 하나의 유닛 */
+  groupId?: string
 }
 
 /**
@@ -134,51 +137,109 @@ export interface ItemMove {
 const MIN_ALIGN_ITEMS = 2
 const MIN_DISTRIBUTE_ITEMS = 3
 
+/** 정렬·분배의 원자 유닛 — 그룹 멤버는 union bbox로 병합, 단일 항목은 그 자체가 유닛 */
+interface AlignUnit {
+  items: Array<{ item: AlignableItem; box: BBox }>
+  box: BBox
+}
+
+/** 같은 groupId를 공유하는 항목들을 union bbox 유닛으로 묶는다 (그룹 없음 = 개별 유닛) */
+function buildAlignUnits(items: readonly AlignableItem[]): AlignUnit[] {
+  const units: AlignUnit[] = []
+  const groupUnitIndex = new Map<string, number>()
+  for (const item of items) {
+    const box = rotatedBBox(item)
+    const groupId = item.groupId
+    if (groupId === undefined) {
+      units.push({ items: [{ item, box }], box })
+      continue
+    }
+    const idx = groupUnitIndex.get(groupId)
+    if (idx === undefined) {
+      groupUnitIndex.set(groupId, units.length)
+      units.push({ items: [{ item, box }], box })
+      continue
+    }
+    const unit = units[idx]!
+    unit.items.push({ item, box })
+    unit.box = {
+      left: Math.min(unit.box.left, box.left),
+      top: Math.min(unit.box.top, box.top),
+      right: Math.max(unit.box.right, box.right),
+      bottom: Math.max(unit.box.bottom, box.bottom)
+    }
+  }
+  return units
+}
+
+const unionBox = (units: readonly AlignUnit[]): BBox => ({
+  left: Math.min(...units.map((u) => u.box.left)),
+  top: Math.min(...units.map((u) => u.box.top)),
+  right: Math.max(...units.map((u) => u.box.right)),
+  bottom: Math.max(...units.map((u) => u.box.bottom))
+})
+
+/** 유닛별 수평(수직) 델타를 멤버 전체에 적용 — 결과는 입력 항목 순서를 유지한다 */
+const applyUnitShift = (
+  units: readonly AlignUnit[],
+  deltas: ReadonlyMap<AlignUnit, number>,
+  axis: 'x' | 'y'
+): ItemMove[] =>
+  units.flatMap((unit) =>
+    unit.items.map(({ item }) => {
+      const delta = deltas.get(unit) ?? 0
+      return axis === 'x'
+        ? { id: item.id, x: item.x + delta, y: item.y }
+        : { id: item.id, x: item.x, y: item.y + delta }
+    })
+  )
+
 /**
  * 선택 항목 정렬·균등 분배 (TECH §4.3) — 기준은 회전 바운딩 박스(화면 표시 경계).
- * 정렬은 선택 전체 bbox의 모서리/중심축, 분배는 양 끝 항목 고정 + 내부 간격 균등화.
- * 최소 개수(정렬 2·분배 3) 미달 시 null.
+ * 같은 그룹(groupId)의 항목들은 하나의 원자 유닛으로 병합되어 내부 상대 위치가 불변이다
+ * (Figma 관례 — 그룹이 정렬·분배로 찢어지지 않는다). 정렬은 유닛 전체 bbox의 모서리/
+ * 중심축, 분배는 양 끝 유닛 고정 + 유닛 간 간격 균등화. 최소 유닛 수(정렬 2·분배 3)
+ * 미달 시 null.
  */
 export function alignItems(items: readonly AlignableItem[], op: AlignOp): ItemMove[] | null {
+  if (items.length === 0) return null
+  const units = buildAlignUnits(items)
   const need = op === 'distH' || op === 'distV' ? MIN_DISTRIBUTE_ITEMS : MIN_ALIGN_ITEMS
-  if (items.length < need) return null
+  if (units.length < need) return null
 
-  const boxes = items.map((item) => ({ item, box: rotatedBBox(item) }))
-  const xMin = Math.min(...boxes.map((b) => b.box.left))
-  const xMax = Math.max(...boxes.map((b) => b.box.right))
-  const yMin = Math.min(...boxes.map((b) => b.box.top))
-  const yMax = Math.max(...boxes.map((b) => b.box.bottom))
+  const union = unionBox(units)
 
-  const shiftX = (targetLeft: (box: BBox) => number): ItemMove[] =>
-    boxes.map(({ item, box }) => ({
-      id: item.id,
-      x: item.x + (targetLeft(box) - box.left),
-      y: item.y
-    }))
-  const shiftY = (targetTop: (box: BBox) => number): ItemMove[] =>
-    boxes.map(({ item, box }) => ({
-      id: item.id,
-      x: item.x,
-      y: item.y + (targetTop(box) - box.top)
-    }))
+  const shiftTo = (targets: ReadonlyMap<AlignUnit, number>, axis: 'x' | 'y'): ItemMove[] =>
+    applyUnitShift(units, targets, axis)
+
+  const xMin = union.left
+  const xMax = union.right
+  const yMin = union.top
+  const yMax = union.bottom
 
   switch (op) {
     case 'left':
-      return shiftX(() => xMin)
+      return shiftTo(new Map(units.map((u) => [u, xMin - u.box.left])), 'x')
     case 'right':
-      return shiftX((box) => xMax - (box.right - box.left))
+      return shiftTo(new Map(units.map((u) => [u, xMax - u.box.right])), 'x')
     case 'centerH':
-      return shiftX((box) => (xMin + xMax) / 2 - (box.right - box.left) / 2)
+      return shiftTo(
+        new Map(units.map((u) => [u, (xMin + xMax) / 2 - (u.box.left + u.box.right) / 2])),
+        'x'
+      )
     case 'top':
-      return shiftY(() => yMin)
+      return shiftTo(new Map(units.map((u) => [u, yMin - u.box.top])), 'y')
     case 'bottom':
-      return shiftY((box) => yMax - (box.bottom - box.top))
+      return shiftTo(new Map(units.map((u) => [u, yMax - u.box.bottom])), 'y')
     case 'centerV':
-      return shiftY((box) => (yMin + yMax) / 2 - (box.bottom - box.top) / 2)
+      return shiftTo(
+        new Map(units.map((u) => [u, (yMin + yMax) / 2 - (u.box.top + u.box.bottom) / 2])),
+        'y'
+      )
     case 'distH':
     case 'distV': {
       const horizontal = op === 'distH'
-      const sorted = [...boxes].sort((a, b) => {
+      const sorted = [...units].sort((a, b) => {
         const aStart = horizontal ? a.box.left : a.box.top
         const bStart = horizontal ? b.box.left : b.box.top
         const aEnd = horizontal ? a.box.right : a.box.bottom
@@ -187,20 +248,19 @@ export function alignItems(items: readonly AlignableItem[], op: AlignOp): ItemMo
       })
       const spanStart = horizontal ? xMin : yMin
       const spanEnd = horizontal ? xMax : yMax
-      const sizes = sorted.map(({ box }) =>
-        horizontal ? box.right - box.left : box.bottom - box.top
+      const sizes = sorted.map((unit) =>
+        horizontal ? unit.box.right - unit.box.left : unit.box.bottom - unit.box.top
       )
       const gap =
         (spanEnd - spanStart - sizes.reduce((sum, size) => sum + size, 0)) / (sorted.length - 1)
       let cursor = spanStart
-      return sorted.map(({ item, box }, index) => {
-        const target = cursor
-        cursor += sizes[index] + gap
-        const delta = target - (horizontal ? box.left : box.top)
-        return horizontal
-          ? { id: item.id, x: item.x + delta, y: item.y }
-          : { id: item.id, x: item.x, y: item.y + delta }
-      })
+      const deltas = new Map<AlignUnit, number>()
+      for (const [index, unit] of sorted.entries()) {
+        const delta = cursor - (horizontal ? unit.box.left : unit.box.top)
+        deltas.set(unit, delta)
+        cursor += sizes[index]! + gap
+      }
+      return applyUnitShift(units, deltas, horizontal ? 'x' : 'y')
     }
   }
 }

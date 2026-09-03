@@ -16,8 +16,9 @@ const item = (
   y: number,
   widthPx: number,
   heightPx: number,
-  rotation = 0
-): AlignableItem => ({ id, x, y, widthPx, heightPx, rotation })
+  rotation = 0,
+  groupId?: string
+): AlignableItem => ({ id, x, y, widthPx, heightPx, rotation, groupId })
 
 // --- 회전 바운딩 박스 (Konva 원점 피벗 규약) ---
 
@@ -164,6 +165,79 @@ describe('alignItems — 균등 분배 (distH·distV)', () => {
   it('정렬 최소 1개·분배 최소 2개 → null', () => {
     expect(alignItems([a], 'left')).toBeNull()
     expect(alignItems([a, b], 'distV')).toBeNull()
+  })
+})
+
+// --- 그룹 원자 유닛 — groupId를 공유하는 항목은 하나의 단위로 정렬·분배된다 ---
+
+describe('alignItems — 그룹 유닛 (그룹 내부 상대 위치 불변)', () => {
+  // 그룹 g1: g1a(0..100) + g1b(100..200) → 유닛 bbox (0..200, 0..100)
+  const g1a = item('g1a', 0, 0, 100, 100, 0, 'g1')
+  const g1b = item('g1b', 100, 0, 100, 100, 0, 'g1')
+  const b = item('b', 1000, 0, 100, 100)
+  const c = item('c', 3000, 0, 100, 100)
+  const byId = (moves: NonNullable<ReturnType<typeof alignItems>>, id: string): ItemMove =>
+    moves.find((m) => m.id === id)!
+
+  it('수평 분배 — 그룹은 1유닛: 유닛 간 간격 균등, 그룹 내부 상대 위치 불변', () => {
+    // 유닛: g1(0..200) b(1000..1100) c(3000..3100) — span 0..3100, 유닛 폭 합계 400
+    // gap = (3100 - 400) / 2 = 1350 → b 유닛 left = 200+1350 = 1550
+    const moves = alignItems([g1a, g1b, b, c], 'distH')!
+    expect(byId(moves, 'g1a').x).toBe(0)
+    expect(byId(moves, 'g1b').x).toBe(100) // 그룹 내부 오프셋 100 유지
+    expect(byId(moves, 'b').x).toBe(1550)
+    expect(byId(moves, 'c').x).toBe(3000)
+  })
+
+  it('수직 분배 — 그룹 유닛 동일 수학', () => {
+    const vg1a = item('g1a', 0, 0, 100, 100, 0, 'g1')
+    const vg1b = item('g1b', 0, 100, 100, 100, 0, 'g1')
+    const vb = item('b', 0, 1000, 100, 100)
+    const vc = item('c', 0, 3000, 100, 100)
+    const moves = alignItems([vg1a, vg1b, vb, vc], 'distV')!
+    expect(byId(moves, 'g1a').y).toBe(0)
+    expect(byId(moves, 'g1b').y).toBe(100)
+    expect(byId(moves, 'b').y).toBe(1550)
+    expect(byId(moves, 'c').y).toBe(3000)
+  })
+
+  it('단일 그룹(멤버 3개)은 1유닛 — 분배·정렬 모두 null (최소 유닛 미달)', () => {
+    const ga = item('ga', 0, 0, 100, 100, 0, 'g')
+    const gb = item('gb', 1000, 0, 100, 100, 0, 'g')
+    const gc = item('gc', 3000, 0, 100, 100, 0, 'g')
+    expect(alignItems([ga, gb, gc], 'distH')).toBeNull()
+    expect(alignItems([ga, gb, gc], 'left')).toBeNull()
+  })
+
+  it('그룹 + 개별 1개 = 2유닛 — 정렬 가능, 분배 불가', () => {
+    expect(alignItems([g1a, g1b, b], 'left')).not.toBeNull()
+    expect(alignItems([g1a, g1b, b], 'distH')).toBeNull()
+  })
+
+  it('좌측 정렬 — 그룹 유닛 bbox 왼쪽이 기준, 멤버는 동일 델타 평행이동', () => {
+    // 유닛: g1(0..200) b(1000..1100) → xMin 0 — g1 델타 0, b 델타 -1000
+    const moves = alignItems([g1a, g1b, b], 'left')!
+    expect(byId(moves, 'g1a').x).toBe(0)
+    expect(byId(moves, 'g1b').x).toBe(100)
+    expect(byId(moves, 'b').x).toBe(0)
+    expect(moves.every((m) => m.y === 0)).toBe(true)
+  })
+
+  it('가로 중앙 정렬 — 그룹 유닛 중심 기준 평행이동 (내부 오프셋 유지)', () => {
+    // 유닛: g1(0..200) b(1000..1100) → union 0..1100, 중심 550
+    // g1 유닛 중심 100 → 델타 +450, b 유닛 중심 1050 → 델타 -500
+    const moves = alignItems([g1a, g1b, b], 'centerH')!
+    expect(byId(moves, 'g1a').x).toBe(450)
+    expect(byId(moves, 'g1b').x).toBe(550) // 오프셋 100 유지
+    expect(byId(moves, 'b').x).toBe(500)
+  })
+
+  it('그룹 없는 항목들의 기존 동작 하위 호환 — 결과는 항목 수 기준과 동일', () => {
+    const a2 = item('a', 0, 0, 100, 100)
+    const b2 = item('b', 1000, 0, 100, 100)
+    const c2 = item('c', 3000, 0, 100, 100)
+    const moves = alignItems([a2, b2, c2], 'distH')!
+    expect(moves.map((m) => m.x)).toEqual([0, 1500, 3000])
   })
 })
 
