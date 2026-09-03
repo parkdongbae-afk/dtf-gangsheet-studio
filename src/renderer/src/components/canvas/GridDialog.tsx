@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Grid3x3, TriangleAlert } from 'lucide-react'
+import { ChevronDown, ChevronUp, Grid3x3, TriangleAlert } from 'lucide-react'
 import { cmToPx } from '../../../../core/math'
 import type { GridSource } from './placement'
 
@@ -10,8 +10,10 @@ const GAP_CM_MAX = 50
 interface GridDialogProps {
   /** 복제 기준 항목 — 셀 (0,0)이 이 항목의 자리가 된다 */
   item: GridSource
-  /** 문서 가로 (350 DPI px) — 결과 범위 초과 경고 기준 */
+  /** 문서 가로 (350 DPI px) — 가로·전체 채우기 및 범위 초과 경고 기준 */
   widthPx: number
+  /** 문서 세로 (350 DPI px) — 세로·전체 채우기 기준 */
+  heightPx: number
   onConfirm: (rows: number, cols: number, gapPx: number) => void
   onClose: () => void
 }
@@ -31,10 +33,82 @@ const parseGapCm = (text: string): number => {
 const INPUT_CLASS =
   'w-full bg-transparent px-2 py-1.5 text-sm tabular-nums text-zinc-200 outline-none [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none'
 
+/** 축 전체에 들어가는 복제 개수 — (전체 길이 + 간격) ÷ (항목 + 간격), 상한·최소 1 클램프 */
+const fitCount = (totalPx: number, sizePx: number, gapPx: number): number =>
+  Math.min(MAX_GRID, Math.max(1, Math.floor((totalPx + gapPx) / (sizePx + gapPx))))
+
+/** 숫자 입력 + 증감(▲▼) 버튼 — step<1이면 소수 1자리로 표기한다 */
+function StepperField({
+  label,
+  value,
+  min,
+  max,
+  step,
+  unit,
+  autoFocus = false,
+  onChange
+}: {
+  label: string
+  value: string
+  min: number
+  max: number
+  step: number
+  unit: string
+  autoFocus?: boolean
+  onChange: (text: string) => void
+}): React.JSX.Element {
+  const stepBy = (dir: 1 | -1): void => {
+    const base = Number.parseFloat(value)
+    const next = Math.min(Math.max((Number.isNaN(base) ? min : base) + dir * step, min), max)
+    onChange(step < 1 ? next.toFixed(1) : String(Math.round(next)))
+  }
+  const spinnerClass =
+    'flex flex-1 items-center justify-center px-1 text-zinc-500 transition-colors hover:bg-zinc-800 hover:text-zinc-100 active:bg-zinc-700'
+  return (
+    <label className="flex flex-col gap-1">
+      <span className="text-[10px] font-medium uppercase tracking-wide text-zinc-500">{label}</span>
+      <div className="flex items-stretch rounded-md border border-zinc-800 bg-zinc-950 transition-all focus-within:ring-1 focus-within:ring-indigo-500">
+        <input
+          type="number"
+          min={min}
+          max={max}
+          step={step}
+          value={value}
+          autoFocus={autoFocus}
+          onChange={(e) => onChange(e.target.value)}
+          className={INPUT_CLASS}
+        />
+        <span className="flex items-center px-1.5 text-[10px] text-zinc-500">{unit}</span>
+        <span className="flex flex-col border-l border-zinc-800">
+          <button
+            type="button"
+            onClick={() => stepBy(1)}
+            aria-label={`${label} 증가`}
+            title={`${label} 증가`}
+            className={spinnerClass}
+          >
+            <ChevronUp size={10} strokeWidth={2} />
+          </button>
+          <button
+            type="button"
+            onClick={() => stepBy(-1)}
+            aria-label={`${label} 감소`}
+            title={`${label} 감소`}
+            className={`${spinnerClass} border-t border-zinc-800`}
+          >
+            <ChevronDown size={10} strokeWidth={2} />
+          </button>
+        </span>
+      </div>
+    </label>
+  )
+}
+
 /** 그리드 복제 대화상자 (S5 세션 2) — 행×열·간격(cm)을 받아 절대 px gap으로 확정 커밋 */
 export function GridDialog({
   item,
   widthPx,
+  heightPx,
   onConfirm,
   onClose
 }: GridDialogProps): React.JSX.Element {
@@ -62,6 +136,20 @@ export function GridDialog({
   }
   const overRoll = cols * item.widthPx + (cols - 1) * gapPx > widthPx
 
+  /** 현재 간격 기준으로 각 축을 채우는 개수를 입력에 반영 — 적용은 사용자가 확정 */
+  const fillRow = (): void => {
+    setRowsText('1')
+    setColsText(String(fitCount(widthPx, item.widthPx, gapPx)))
+  }
+  const fillCol = (): void => {
+    setRowsText(String(fitCount(heightPx, item.heightPx, gapPx)))
+    setColsText('1')
+  }
+  const fillAll = (): void => {
+    setRowsText(String(fitCount(heightPx, item.heightPx, gapPx)))
+    setColsText(String(fitCount(widthPx, item.widthPx, gapPx)))
+  }
+
   return (
     <div
       className="fixed inset-0 z-10 flex items-center justify-center bg-zinc-950/70 backdrop-blur-[2px]"
@@ -82,56 +170,60 @@ export function GridDialog({
           <h2 className="text-sm font-semibold text-zinc-100">이미지 복제</h2>
         </div>
         <div className="grid grid-cols-3 gap-2">
-          <label className="flex flex-col gap-1">
-            <span className="text-[10px] font-medium uppercase tracking-wide text-zinc-500">
-              행
-            </span>
-            <div className="flex items-center rounded-md border border-zinc-800 bg-zinc-950 transition-all focus-within:ring-1 focus-within:ring-indigo-500">
-              <input
-                type="number"
-                min={1}
-                max={MAX_GRID}
-                value={rowsText}
-                autoFocus
-                onChange={(e) => setRowsText(e.target.value)}
-                className={INPUT_CLASS}
-              />
-              <span className="px-2 text-[10px] text-zinc-500">개</span>
-            </div>
-          </label>
-          <label className="flex flex-col gap-1">
-            <span className="text-[10px] font-medium uppercase tracking-wide text-zinc-500">
-              열
-            </span>
-            <div className="flex items-center rounded-md border border-zinc-800 bg-zinc-950 transition-all focus-within:ring-1 focus-within:ring-indigo-500">
-              <input
-                type="number"
-                min={1}
-                max={MAX_GRID}
-                value={colsText}
-                onChange={(e) => setColsText(e.target.value)}
-                className={INPUT_CLASS}
-              />
-              <span className="px-2 text-[10px] text-zinc-500">개</span>
-            </div>
-          </label>
-          <label className="flex flex-col gap-1">
-            <span className="text-[10px] font-medium uppercase tracking-wide text-zinc-500">
-              간격
-            </span>
-            <div className="flex items-center rounded-md border border-zinc-800 bg-zinc-950 transition-all focus-within:ring-1 focus-within:ring-indigo-500">
-              <input
-                type="number"
-                min={0}
-                max={GAP_CM_MAX}
-                step={0.1}
-                value={gapText}
-                onChange={(e) => setGapText(e.target.value)}
-                className={INPUT_CLASS}
-              />
-              <span className="px-2 text-[10px] text-zinc-500">cm</span>
-            </div>
-          </label>
+          <StepperField
+            label="행"
+            value={rowsText}
+            min={1}
+            max={MAX_GRID}
+            step={1}
+            unit="개"
+            autoFocus
+            onChange={setRowsText}
+          />
+          <StepperField
+            label="열"
+            value={colsText}
+            min={1}
+            max={MAX_GRID}
+            step={1}
+            unit="개"
+            onChange={setColsText}
+          />
+          <StepperField
+            label="간격"
+            value={gapText}
+            min={0}
+            max={GAP_CM_MAX}
+            step={0.5}
+            unit="cm"
+            onChange={setGapText}
+          />
+        </div>
+        <div className="mt-2 grid grid-cols-3 gap-1.5">
+          <button
+            type="button"
+            onClick={fillRow}
+            title="문서 가로 폭을 기준으로 한 줄 복제 개수 계산"
+            className="rounded-md border border-zinc-800 bg-zinc-900 px-2 py-1.5 text-xs text-zinc-300 transition-colors hover:bg-zinc-800 hover:text-zinc-100 active:scale-95"
+          >
+            가로방향
+          </button>
+          <button
+            type="button"
+            onClick={fillCol}
+            title="문서 세로 길이를 기준으로 한 줄 복제 개수 계산"
+            className="rounded-md border border-zinc-800 bg-zinc-900 px-2 py-1.5 text-xs text-zinc-300 transition-colors hover:bg-zinc-800 hover:text-zinc-100 active:scale-95"
+          >
+            세로방향
+          </button>
+          <button
+            type="button"
+            onClick={fillAll}
+            title="문서 전체를 채우는 행×열 개수 계산 (상한 50×50)"
+            className="rounded-md border border-indigo-500 bg-indigo-500/15 px-2 py-1.5 text-xs font-medium text-indigo-300 transition-colors hover:bg-indigo-500/25 active:scale-95"
+          >
+            전체 채우기
+          </button>
         </div>
         <p className="my-3 text-xs tabular-nums text-zinc-400">
           총 {total}개 (신규 {total - 1}개 복제) · 결과 {extentCm.w.toFixed(1)} ×{' '}

@@ -6,12 +6,14 @@ import {
   Boxes,
   Expand,
   FileOutput,
+  FolderOpen,
   Grid2x2,
   Grid3x3,
   ImagePlus,
   LayoutGrid,
   Maximize,
   Redo2,
+  Save,
   Shrink,
   Undo2
 } from 'lucide-react'
@@ -47,6 +49,7 @@ import {
 } from './placement'
 import { useHtmlImage } from './useHtmlImage'
 import { PropertiesPanel } from '../PropertiesPanel'
+import { PROJECT_FORMAT, PROJECT_VERSION, type ProjectData } from '../../../../core/project'
 
 /**
  * 프록시 캔버스 뷰포트 (S3) + 씬 이미지 배치·선택·이동·삭제 (S4)·리사이즈/회전/복제/그리드 (S5).
@@ -113,9 +116,21 @@ export interface ProxyCanvasProps {
   widthPx: number
   /** 문서 세로 (350 DPI px) — 13,780 / 27,559 */
   heightPx: number
+  /** 세션 시작 씬 — 새 문서(빈 배열) 또는 불러온 프로젝트 이미지 */
+  initialImages: PlacedImage[]
+  /** 프로젝트 로드 횟수(nonce) — 증가 시 씬을 initialImages로 전체 교체 */
+  loadNonce: number
+  /** 툴바 "열기" — App이 .dtf 다이얼로그를 주관한다(문서 규격 교체 필요) */
+  onOpenProject: () => void
 }
 
-export function ProxyCanvas({ widthPx, heightPx }: ProxyCanvasProps): React.JSX.Element {
+export function ProxyCanvas({
+  widthPx,
+  heightPx,
+  initialImages,
+  loadNonce,
+  onOpenProject
+}: ProxyCanvasProps): React.JSX.Element {
   const stageRef = useRef<Konva.Stage>(null)
   /** 씬 전체에서 유일한 트랜스포머 — 선택 테두리 렌더 (이미지별 트랜스포머 금지) */
   const transformerRef = useRef<Konva.Transformer>(null)
@@ -129,7 +144,7 @@ export function ProxyCanvas({ widthPx, heightPx }: ProxyCanvasProps): React.JSX.
   const [view, setView] = useState<ViewTransform>(() =>
     fitView(widthPx, heightPx, window.innerWidth, window.innerHeight)
   )
-  const [images, setImages] = useState<PlacedImage[]>([])
+  const [images, setImages] = useState<PlacedImage[]>(initialImages)
   /**
    * 실행취소 히스토리 — PlacedImage[] JSON 스냅샷만 저장 (Konva 객체 저장 금지 철칙).
    * 스냅샷은 배열 참조를 그대로 두는데, 씬 갱신은 항상 spread/map으로 새 배열을 만들므로
@@ -233,6 +248,20 @@ export function ProxyCanvas({ widthPx, heightPx }: ProxyCanvasProps): React.JSX.
   const canUndo = past.length > 0
   const canRedo = future.length > 0
 
+  /**
+   * 프로젝트 로드 채택 — nonce 증가 시 씬을 initialImages로 전체 교체하고 히스토리·
+   * 선택을 초기화한다(undo는 로드 이후 편집부터). 마운트 nonce는 useState 초기값으로
+   * 이미 반영됐으므로 건너뛴다.
+   */
+  const adoptedNonceRef = useRef(loadNonce)
+  useEffect(() => {
+    if (loadNonce === adoptedNonceRef.current) return
+    adoptedNonceRef.current = loadNonce
+    setImages(initialImages)
+    setHistory({ past: [], future: [] })
+    setSelectedIds([])
+  }, [loadNonce, initialImages])
+
   /** 뷰포트(패널 제외 캔버스 영역) 크기 추적 — 조작 이력 없으면 문서를 다시 맞춤 */
   useEffect(() => {
     const el = viewportRef.current
@@ -281,6 +310,45 @@ export function ProxyCanvas({ widthPx, heightPx }: ProxyCanvasProps): React.JSX.
   }, [gridOpen, gridSettingsOpen, bgSitesOpen, exportOpen, nestingOpen])
 
   /**
+   * .dtf 프로젝트 저장 — 씬을 dataUrl 없는 스키마로 직렬화해 메인에 위임
+   * (다이얼로그·기록·자체 검증은 메인 담당). pathOverride는 E2E 주입용.
+   */
+  const handleSave = useCallback(
+    async (pathOverride?: string): Promise<void> => {
+      const data: ProjectData = {
+        format: PROJECT_FORMAT,
+        version: PROJECT_VERSION,
+        document: { widthPx, heightPx },
+        images: images.map(({ id, filePath, widthPx: w, heightPx: h, x, y, rotation }) => ({
+          id,
+          filePath,
+          widthPx: w,
+          heightPx: h,
+          x,
+          y,
+          rotation
+        }))
+      }
+      try {
+        await window.api.saveProject(data, pathOverride)
+      } catch (err) {
+        alert(`프로젝트 저장 실패: ${err instanceof Error ? err.message : String(err)}`)
+      }
+    },
+    [images, widthPx, heightPx]
+  )
+
+  /** E2E 자동검증 훅 (dtf:import-paths 패턴 계승) — 저장 다이얼로그 없이 경로로 기록 */
+  useEffect(() => {
+    const onSaveProject = (e: Event): void => {
+      const path = (e as CustomEvent<string>).detail
+      if (typeof path === 'string' && path.length > 0) void handleSave(path)
+    }
+    window.addEventListener('dtf:save-project', onSaveProject)
+    return () => window.removeEventListener('dtf:save-project', onSaveProject)
+  }, [handleSave])
+
+  /**
    * 씬 편집 단축키 (통합) — Ctrl+Z=실행취소, Ctrl+Shift+Z/Ctrl+Y=다시실행(선택 불필요),
    * Del/Backspace=삭제, R=90° 회전, Ctrl/Cmd+D=복제(화면 24px 오프셋 — 캐스케이드 규칙).
    * 대화상자 모달 중·텍스트 입력 포커스 중에는 전면 무시한다.
@@ -290,6 +358,11 @@ export function ProxyCanvas({ widthPx, heightPx }: ProxyCanvasProps): React.JSX.
     const onKeyDown = (e: KeyboardEvent): void => {
       if (isEditableTarget(e.target)) return
       const mod = e.ctrlKey || e.metaKey
+      if (mod && (e.key === 's' || e.key === 'S')) {
+        e.preventDefault() // 브라우저/Electron 기본 페이지 저장 차단
+        if (!e.repeat) void handleSave()
+        return
+      }
       if (mod && 'zyZY'.includes(e.key)) {
         e.preventDefault() // 브라우저/Electron 기본 undo·redo 차단
         if (e.repeat) return // 키 홀드 폭주 방지 — 단위 스텝만
@@ -346,7 +419,8 @@ export function ProxyCanvas({ widthPx, heightPx }: ProxyCanvasProps): React.JSX.
     nestingOpen,
     commitImages,
     undo,
-    redo
+    redo,
+    handleSave
   ])
 
   /**
@@ -965,9 +1039,17 @@ export function ProxyCanvas({ widthPx, heightPx }: ProxyCanvasProps): React.JSX.
             <span className="font-semibold text-zinc-200">{zoomPercent}%</span>
           </div>
           <div className="flex items-center gap-1 rounded-lg border border-zinc-800 bg-zinc-900/95 p-1 shadow-2xl backdrop-blur">
+            <OverlayButton onClick={onOpenProject} title="프로젝트 열기 (.dtf)">
+              <FolderOpen size={14} strokeWidth={1.5} />
+              열기
+            </OverlayButton>
             <OverlayButton onClick={handleImport} title="이미지 가져오기">
               <ImagePlus size={14} strokeWidth={1.5} />
               가져오기
+            </OverlayButton>
+            <OverlayButton onClick={() => void handleSave()} title="프로젝트 저장 (.dtf) — Ctrl+S">
+              <Save size={14} strokeWidth={1.5} />
+              저장
             </OverlayButton>
             <div className="mx-0.5 h-5 w-px bg-zinc-800" />
             <OverlayButton
@@ -1050,6 +1132,7 @@ export function ProxyCanvas({ widthPx, heightPx }: ProxyCanvasProps): React.JSX.
           <GridDialog
             item={selectedItem}
             widthPx={widthPx}
+            heightPx={heightPx}
             onConfirm={handleGridConfirm}
             onClose={() => setGridOpen(false)}
           />

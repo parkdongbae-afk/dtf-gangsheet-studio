@@ -1,5 +1,5 @@
-import { useState } from 'react'
-import { ChevronDown, FilePlus2 } from 'lucide-react'
+import { useCallback, useEffect, useState } from 'react'
+import { ChevronDown, FilePlus2, FolderOpen } from 'lucide-react'
 import {
   DTF_WIDTH_CM,
   HEIGHT_PRESETS_M,
@@ -8,18 +8,62 @@ import {
   getCanvasWidthPx,
   type HeightPresetM
 } from '../../core/math'
-import { ProxyCanvas } from './components/canvas/ProxyCanvas'
+import { ProxyCanvas, type PlacedImage } from './components/canvas/ProxyCanvas'
+import { hydrateProjectImages } from './projectIO'
+
+/** 작업 세션 — 문서 규격 + 씬 이미지. nonce 증가 = 프로젝트 불러오기로 전체 교체 */
+interface DocumentSession {
+  widthPx: number
+  heightPx: number
+  images: PlacedImage[]
+  nonce: number
+}
 
 function App(): React.JSX.Element {
   const [widthCm, setWidthCm] = useState<number>(DTF_WIDTH_CM)
   const [heightM, setHeightM] = useState<HeightPresetM>(1)
-  const [created, setCreated] = useState(false)
+  const [doc, setDoc] = useState<DocumentSession | null>(null)
 
   const widthPx = getCanvasWidthPx(widthCm)
   const heightPx = getCanvasHeightPx(heightM)
 
-  if (created) {
-    return <ProxyCanvas widthPx={widthPx} heightPx={heightPx} />
+  /** .dtf 프로젝트 열기 — 프리뷰 재생성(hydrate) 후 세션 교체 (새 문서 만들기와 동일 경로) */
+  const openProjectFromDisk = useCallback(async (pathOverride?: string): Promise<void> => {
+    try {
+      const project = await window.api.openProject(pathOverride)
+      if (!project) return
+      const images = await hydrateProjectImages(project.images)
+      setDoc((prev) => ({
+        widthPx: project.document.widthPx,
+        heightPx: project.document.heightPx,
+        images,
+        nonce: (prev?.nonce ?? 0) + 1
+      }))
+    } catch (err) {
+      alert(`프로젝트 열기 실패: ${err instanceof Error ? err.message : String(err)}`)
+    }
+  }, [])
+
+  /** E2E 자동검증 훅 (dtf:import-paths 패턴 계승) — 파일 다이얼로그 없이 경로로 프로젝트를 연다 */
+  useEffect(() => {
+    const onOpenProject = (e: Event): void => {
+      const path = (e as CustomEvent<string>).detail
+      if (typeof path === 'string' && path.length > 0) void openProjectFromDisk(path)
+    }
+    window.addEventListener('dtf:open-project', onOpenProject)
+    return () => window.removeEventListener('dtf:open-project', onOpenProject)
+  }, [openProjectFromDisk])
+
+  if (doc) {
+    return (
+      <ProxyCanvas
+        widthPx={doc.widthPx}
+        heightPx={doc.heightPx}
+        initialImages={doc.images}
+        loadNonce={doc.nonce}
+        onOpenProject={() => void openProjectFromDisk()}
+      />
+    )
   }
 
   return (
@@ -98,12 +142,22 @@ function App(): React.JSX.Element {
           </div>
         </div>
 
-        <button
-          onClick={() => setCreated(true)}
-          className="mt-5 w-full rounded-md bg-indigo-600 py-2 text-sm font-medium text-white transition-colors hover:bg-indigo-500 active:scale-[0.98]"
-        >
-          문서 만들기
-        </button>
+        <div className="mt-5 flex gap-2">
+          <button
+            type="button"
+            onClick={() => void openProjectFromDisk()}
+            className="flex items-center justify-center gap-1.5 rounded-md border border-zinc-800 bg-zinc-900 px-3 py-2 text-sm text-zinc-200 transition-colors hover:bg-zinc-800 active:scale-[0.98]"
+          >
+            <FolderOpen size={15} strokeWidth={1.5} />
+            열기
+          </button>
+          <button
+            onClick={() => setDoc({ widthPx, heightPx, images: [], nonce: 1 })}
+            className="flex-1 rounded-md bg-indigo-600 py-2 text-sm font-medium text-white transition-colors hover:bg-indigo-500 active:scale-[0.98]"
+          >
+            문서 만들기
+          </button>
+        </div>
       </div>
     </main>
   )
