@@ -94,16 +94,17 @@ describe('getCanvasWidthPx — 가로 폭 선택', () => {
   })
 })
 
-describe('WIDTH_PRESETS_CM — 5cm 단위 프리셋', () => {
-  it('5~100cm까지 5cm 스텝 20개', () => {
-    expect(WIDTH_PRESETS_CM).toHaveLength(20)
+describe('WIDTH_PRESETS_CM — 1cm 단위 프리셋', () => {
+  it('5~100cm까지 1cm 스텝 96개', () => {
+    expect(WIDTH_PRESETS_CM).toHaveLength(96)
     expect(WIDTH_PRESETS_CM[0]).toBe(MIN_WIDTH_CM)
     expect(WIDTH_PRESETS_CM[WIDTH_PRESETS_CM.length - 1]).toBe(MAX_WIDTH_CM)
   })
 
-  it('모든 프리셋이 5cm 배수이고 PSD 한계 내', () => {
+  it('모든 프리셋이 정수 cm이고 PSD 한계 내', () => {
     for (const cm of WIDTH_PRESETS_CM) {
       expect(cm % WIDTH_STEP_CM).toBe(0)
+      expect(Number.isInteger(cm)).toBe(true)
       expect(cmToPx(cm)).toBeLessThanOrEqual(PSD_MAX_PX)
     }
   })

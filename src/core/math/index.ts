@@ -12,18 +12,18 @@ export const DTF_WIDTH_CM = 50
 /** 문서 캔버스 가로 (px) — 50cm @ 350dpi = 6,890 */
 export const CANVAS_WIDTH_PX = cmToPx(DTF_WIDTH_CM, 350)
 
-/** 가로 폭 선택 단위 (cm) — 5cm 스텝 */
-export const WIDTH_STEP_CM = 5
+/** 가로 폭 선택 단위 (cm) — 1cm 스텝 */
+export const WIDTH_STEP_CM = 1
 
-/** 가로 폭 최소 (cm) — 스텝 1개 */
+/** 가로 폭 최소 (cm) */
 export const MIN_WIDTH_CM = 5
 
 /** 가로 폭 최대 (cm) — 1m */
 export const MAX_WIDTH_CM = 100
 
-/** 가로 폭 프리셋 — 5cm 단위 5~100cm */
+/** 가로 폭 프리셋 — 1cm 단위 5~100cm */
 export const WIDTH_PRESETS_CM: readonly number[] = Array.from(
-  { length: MAX_WIDTH_CM / WIDTH_STEP_CM },
+  { length: (MAX_WIDTH_CM - MIN_WIDTH_CM) / WIDTH_STEP_CM + 1 },
   (_, i) => MIN_WIDTH_CM + i * WIDTH_STEP_CM
 )
 
