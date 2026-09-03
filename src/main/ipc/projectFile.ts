@@ -45,6 +45,12 @@ async function pickOpenPath(): Promise<string | null> {
   return picked
 }
 
+export interface OpenedProject {
+  data: ProjectData
+  /** 열린 파일 절대 경로 — 문서 이름 표시·재저장 기본 경로 힌트 */
+  filePath: string
+}
+
 export function registerProjectIpc(): void {
   ipcMain.handle(
     'project:save',
@@ -64,7 +70,7 @@ export function registerProjectIpc(): void {
 
   ipcMain.handle(
     'project:open',
-    async (_event, pathOverride?: unknown): Promise<ProjectData | null> => {
+    async (_event, pathOverride?: unknown): Promise<OpenedProject | null> => {
       const source =
         typeof pathOverride === 'string' && pathOverride.length > 0
           ? pathOverride
@@ -76,7 +82,7 @@ export function registerProjectIpc(): void {
       } catch {
         throw new Error('프로젝트 파일을 해석할 수 없습니다 — 손상되었거나 DTF 프로젝트가 아닙니다')
       }
-      return validateProjectData(raw)
+      return { data: validateProjectData(raw), filePath: source }
     }
   )
 }

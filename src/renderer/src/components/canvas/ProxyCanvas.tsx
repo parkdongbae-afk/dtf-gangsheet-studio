@@ -200,6 +200,10 @@ export interface ProxyCanvasProps {
   onOpenProject: () => void
   /** 툴바 "새 파일" — App이 세션을 폐기하고 새 문서 설정 화면으로 돌아간다 */
   onNewProject: () => void
+  /** 열린 프로젝트 파일 이름 (확장자 제외) — 새 문서는 null */
+  projectFileName: string | null
+  /** 저장 완료로 문서 이름이 확정될 때 App 세션에 반영 */
+  onProjectFileName: (name: string) => void
 }
 
 export function ProxyCanvas({
@@ -208,7 +212,9 @@ export function ProxyCanvas({
   initialImages,
   loadNonce,
   onOpenProject,
-  onNewProject
+  onNewProject,
+  projectFileName,
+  onProjectFileName
 }: ProxyCanvasProps): React.JSX.Element {
   const stageRef = useRef<Konva.Stage>(null)
   /** 씬 전체에서 유일한 트랜스포머 — 선택 테두리 렌더 (이미지별 트랜스포머 금지) */
@@ -492,12 +498,19 @@ export function ProxyCanvas({
         )
       }
       try {
-        await window.api.saveProject(data, pathOverride)
+        const savedPath = await window.api.saveProject(data, pathOverride)
+        if (savedPath) {
+          const name = savedPath
+            .split(/[\\/]/)
+            .pop()
+            ?.replace(/\.[^.]+$/, '')
+          if (name) onProjectFileName(name)
+        }
       } catch (err) {
         alert(`프로젝트 저장 실패: ${err instanceof Error ? err.message : String(err)}`)
       }
     },
-    [images, widthPx, heightPx]
+    [images, widthPx, heightPx, onProjectFileName]
   )
 
   /** E2E 자동검증 훅 (dtf:import-paths 패턴 계승) — 저장 다이얼로그 없이 경로로 기록 */
@@ -1644,6 +1657,17 @@ export function ProxyCanvas({
           docW={widthPx}
           docH={heightPx}
         />
+
+        {/* 문서 이름 — 열거나 저장한 .dtf 파일명 (새 문서는 "제목 없음") */}
+        <div className="absolute left-3 top-8 flex select-none items-center gap-1.5 rounded-md border border-zinc-800 bg-zinc-900 px-2.5 py-1 text-[11px] text-zinc-300">
+          <span
+            className="max-w-[240px] truncate font-medium"
+            title={projectFileName ?? undefined}
+          >
+            {projectFileName ?? '제목 없음'}
+          </span>
+          <span className="text-zinc-600">.dtf</span>
+        </div>
 
         {/* 상태 오버레이: 문서 치수 · 현재 배율 · 툴바 — 상단 자(22px) 아래에 위치 */}
         <div className="absolute right-3 top-8 flex select-none items-center gap-2">

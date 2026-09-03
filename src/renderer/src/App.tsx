@@ -11,13 +11,21 @@ import {
 import { ProxyCanvas, type PlacedImage } from './components/canvas/ProxyCanvas'
 import { hydrateProjectImages } from './projectIO'
 
-/** 작업 세션 — 문서 규격 + 씬 이미지. nonce 증가 = 프로젝트 불러오기로 전체 교체 */
+/** 작업 세션 — 문서 규격 + 씬 이미지 + 문서 이름. nonce 증가 = 프로젝트 불러오기로 전체 교체 */
 interface DocumentSession {
   widthPx: number
   heightPx: number
   images: PlacedImage[]
   nonce: number
+  /** 열거나 저장한 .dtf 파일 이름 (확장자 제외) — 새 문서는 null */
+  fileName: string | null
 }
+
+const fileBaseName = (filePath: string): string =>
+  filePath
+    .split(/[\\/]/)
+    .pop()
+    ?.replace(/\.[^.]+$/, '') ?? filePath
 
 function App(): React.JSX.Element {
   const [widthCm, setWidthCm] = useState<number>(DTF_WIDTH_CM)
@@ -30,14 +38,15 @@ function App(): React.JSX.Element {
   /** .dtf 프로젝트 열기 — 프리뷰 재생성(hydrate) 후 세션 교체 (새 문서 만들기와 동일 경로) */
   const openProjectFromDisk = useCallback(async (pathOverride?: string): Promise<void> => {
     try {
-      const project = await window.api.openProject(pathOverride)
-      if (!project) return
-      const images = await hydrateProjectImages(project.images)
+      const opened = await window.api.openProject(pathOverride)
+      if (!opened) return
+      const images = await hydrateProjectImages(opened.data.images)
       setDoc((prev) => ({
-        widthPx: project.document.widthPx,
-        heightPx: project.document.heightPx,
+        widthPx: opened.data.document.widthPx,
+        heightPx: opened.data.document.heightPx,
         images,
-        nonce: (prev?.nonce ?? 0) + 1
+        nonce: (prev?.nonce ?? 0) + 1,
+        fileName: fileBaseName(opened.filePath)
       }))
     } catch (err) {
       alert(`프로젝트 열기 실패: ${err instanceof Error ? err.message : String(err)}`)
@@ -53,6 +62,11 @@ function App(): React.JSX.Element {
     )
       return
     setDoc(null)
+  }, [])
+
+  /** 문서 이름 갱신 — Ctrl+S 저장 완료 시 저장 경로의 파일명으로 */
+  const handleFileNameChange = useCallback((name: string): void => {
+    setDoc((prev) => (prev ? { ...prev, fileName: name } : prev))
   }, [])
 
   /** E2E 자동검증 훅 (dtf:import-paths 패턴 계승) — 파일 다이얼로그 없이 경로로 프로젝트를 연다 */
@@ -72,6 +86,8 @@ function App(): React.JSX.Element {
         heightPx={doc.heightPx}
         initialImages={doc.images}
         loadNonce={doc.nonce}
+        projectFileName={doc.fileName}
+        onProjectFileName={handleFileNameChange}
         onOpenProject={() => void openProjectFromDisk()}
         onNewProject={handleNewProject}
       />
@@ -164,7 +180,7 @@ function App(): React.JSX.Element {
             열기
           </button>
           <button
-            onClick={() => setDoc({ widthPx, heightPx, images: [], nonce: 1 })}
+            onClick={() => setDoc({ widthPx, heightPx, images: [], nonce: 1, fileName: null })}
             className="flex-1 rounded-md bg-indigo-600 py-2 text-sm font-medium text-white transition-colors hover:bg-indigo-500 active:scale-[0.98]"
           >
             문서 만들기
