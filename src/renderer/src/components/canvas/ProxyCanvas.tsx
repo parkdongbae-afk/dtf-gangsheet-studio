@@ -1660,10 +1660,7 @@ export function ProxyCanvas({
 
         {/* 문서 이름 — 열거나 저장한 .dtf 파일명 (새 문서는 "제목 없음") */}
         <div className="absolute left-3 top-8 flex select-none items-center gap-1.5 rounded-md border border-zinc-800 bg-zinc-900 px-2.5 py-1 text-[11px] text-zinc-300">
-          <span
-            className="max-w-[240px] truncate font-medium"
-            title={projectFileName ?? undefined}
-          >
+          <span className="max-w-[240px] truncate font-medium" title={projectFileName ?? undefined}>
             {projectFileName ?? '제목 없음'}
           </span>
           <span className="text-zinc-600">.dtf</span>
