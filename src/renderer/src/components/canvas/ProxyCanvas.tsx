@@ -9,6 +9,7 @@ import {
   Grid2x2,
   Grid3x3,
   ImagePlus,
+  LayoutGrid,
   Maximize,
   Redo2,
   Shrink,
@@ -155,8 +156,27 @@ export function ProxyCanvas({ widthPx, heightPx }: ProxyCanvasProps): React.JSX.
   const [nestingOpen, setNestingOpen] = useState(false)
   /** 그리드 표시 설정 — 보기 옵션이라 히스토리(undo) 대상 아님 */
   const [gridSettings, setGridSettings] = useState<GridSettings>(DEFAULT_GRID_SETTINGS)
+  /** 문서 배경 체커보드 표시 — 흰색 배경 이미지의 경계 식별용 보기 옵션(표시 전용) */
+  const [checkerBg, setCheckerBg] = useState(false)
+  /** 휠 클릭(중앙 버튼) 드래그 팬 진행 중 — 커서 표시용 */
+  const [panning, setPanning] = useState(false)
   /** 배경 제거 진행 중 — 사이드카 추론(첫 요청은 모델 다운로드 포함) 동안 버튼 잠금 */
   const [removeBusy, setRemoveBusy] = useState(false)
+
+  /** 체커보드 패턴 타일(16px) — 흰색 배경 이미지의 경계 식별용 */
+  const checkerPattern = useMemo(() => {
+    const tile = document.createElement('canvas')
+    tile.width = 16
+    tile.height = 16
+    const ctx = tile.getContext('2d')
+    if (!ctx) return null
+    ctx.fillStyle = '#ffffff'
+    ctx.fillRect(0, 0, 16, 16)
+    ctx.fillStyle = '#d4d4d8'
+    ctx.fillRect(0, 0, 8, 8)
+    ctx.fillRect(8, 8, 8, 8)
+    return tile
+  }, [])
 
   /**
    * 단일 선택 항목 — 정확히 1개 선택 시에만 존재(수치 편집·그리드 복제·화면 채우기 기준).
@@ -376,13 +396,26 @@ export function ProxyCanvas({ widthPx, heightPx }: ProxyCanvasProps): React.JSX.
     setView((prev) => ({ ...prev, x: e.currentTarget.x(), y: e.currentTarget.y() }))
   }
 
+  /** 휠 클릭 팬 진행 정보 — mousedown 시점 화면 좌표와 뷰 오프셋 스냅샷 */
+  const wheelPanRef = useRef<{ sx: number; sy: number; vx: number; vy: number } | null>(null)
+
   /**
-   * Stage 빈 곳(스테이지 자신·문서 배경) mousedown — 마키(드래그 영역 선택) 시작.
-   * Ctrl 없이 시작하면 즉시 전체 선택 해제(TC-6), Ctrl 드래그는 기존 선택에 합산.
-   * Space 팬 모드 중에는 내비게이션이 우선한다.
+   * Stage mousedown — 휠 클릭(중앙 버튼)은 어디에서나 팬 시작(Chromium 오토스크롤
+   * 차단), 좌클릭 빈 곳은 마키(드래그 영역 선택) 시작. Ctrl 없이 시작하면 즉시 전체
+   * 선택 해제(TC-6), Ctrl 드래그는 기존 선택에 합산. Space 팬 모드 중에는
+   * 내비게이션이 우선한다.
    */
   const handleStageMouseDown = (e: Konva.KonvaEventObject<MouseEvent>): void => {
-    if (spaceDown) return
+    if (e.evt.button === 1) {
+      e.evt.preventDefault()
+      const pointer = stageRef.current?.getPointerPosition()
+      if (pointer) {
+        wheelPanRef.current = { sx: pointer.x, sy: pointer.y, vx: view.x, vy: view.y }
+        setPanning(true)
+      }
+      return
+    }
+    if (e.evt.button !== 0 || spaceDown) return
     const onEmpty = e.target === e.target.getStage() || e.target.name() === DOC_BACKGROUND
     if (!onEmpty) return
     const stage = stageRef.current
@@ -395,17 +428,38 @@ export function ProxyCanvas({ widthPx, heightPx }: ProxyCanvasProps): React.JSX.
     setMarquee({ start: doc, current: doc, baseIds, additive })
   }
 
-  /** 마키 진행 — 드래그 사각형과 1px이라도 교차하는 항목을 실시간 선택(TC-1) */
+  /** Stage mousemove — 휠 클릭 팬 우선 처리, 아니면 마키 진행(1px 교차 실시간 히트) */
   const handleStageMouseMove = (e: Konva.KonvaEventObject<MouseEvent>): void => {
-    if (!marquee) return
+    const pan = wheelPanRef.current
     const stage = e.target.getStage()
     const pointer = stage?.getPointerPosition()
     if (!pointer) return
+    if (pan) {
+      interactedRef.current = true
+      setView((prev) => ({
+        ...prev,
+        x: pan.vx + (pointer.x - pan.sx),
+        y: pan.vy + (pointer.y - pan.sy)
+      }))
+      return
+    }
+    if (!marquee) return
     const doc = screenToDoc(view, pointer.x, pointer.y)
     setMarquee((prev) => (prev ? { ...prev, current: doc } : prev))
     const hits = marqueeSelection(images, marquee.start, doc)
     setSelectedIds(marquee.additive ? Array.from(new Set([...marquee.baseIds, ...hits])) : hits)
   }
+
+  /** 휠 클릭 팬 종료 — 릴리즈는 스테이지 밖에서도 놓치지 않도록 window에서 포착 */
+  useEffect(() => {
+    if (!panning) return
+    const onMouseUp = (): void => {
+      wheelPanRef.current = null
+      setPanning(false)
+    }
+    window.addEventListener('mouseup', onMouseUp)
+    return () => window.removeEventListener('mouseup', onMouseUp)
+  }, [panning])
 
   /**
    * 마키 종료 — 마우스 릴리즈는 스테이지 밖에서도 놓치지 않도록 window에서 포착.
@@ -764,7 +818,7 @@ export function ProxyCanvas({ widthPx, heightPx }: ProxyCanvasProps): React.JSX.
   return (
     <div
       className="fixed inset-0 flex overflow-hidden bg-zinc-950"
-      style={{ cursor: spaceDown ? 'grab' : 'default' }}
+      style={{ cursor: panning ? 'grabbing' : spaceDown ? 'grab' : 'default' }}
     >
       <div
         ref={viewportRef}
@@ -801,6 +855,24 @@ export function ProxyCanvas({ widthPx, heightPx }: ProxyCanvasProps): React.JSX.
               perfectDrawEnabled={false}
             />
           </Layer>
+          {checkerBg && checkerPattern && (
+            <Layer listening={false}>
+              {/* 체커보드 배경 — 투명 영역 표시 관례. 표시 전용 보기 옵션이라 내보내기와
+                  무관하며, 스테이지 배율 역보정으로 화면 기준 셀 크기를 일정하게 유지 */}
+              <Shape
+                sceneFunc={(ctx) => {
+                  const pattern = ctx.createPattern(checkerPattern, 'repeat')
+                  if (!pattern) return
+                  ctx.save()
+                  ctx.scale(1 / view.scale, 1 / view.scale)
+                  ctx.fillStyle = pattern
+                  ctx.fillRect(0, 0, widthPx * view.scale, heightPx * view.scale)
+                  ctx.restore()
+                }}
+                perfectDrawEnabled={false}
+              />
+            </Layer>
+          )}
           {gridSettings.visible && (
             <Layer listening={false}>
               {/* 격자 오버레이 — 단일 Shape에 전체 경로를 한 번에 그린다(노드 수 폭주 방지).
@@ -915,6 +987,14 @@ export function ProxyCanvas({ widthPx, heightPx }: ProxyCanvasProps): React.JSX.
               그리드
             </OverlayButton>
             <OverlayButton
+              onClick={() => setCheckerBg((v) => !v)}
+              active={checkerBg}
+              title="문서 배경 체커보드 토글 — 흰색 배경 이미지 경계 식별 (표시 전용)"
+            >
+              <LayoutGrid size={14} strokeWidth={1.5} />
+              배경
+            </OverlayButton>
+            <OverlayButton
               onClick={() => handleFitMode('cover')}
               disabled={!selectedItem}
               title="화면 채우기 (cover)"
@@ -1006,9 +1086,9 @@ export function ProxyCanvas({ widthPx, heightPx }: ProxyCanvasProps): React.JSX.
 
         {/* 조작 힌트 */}
         <div className="absolute bottom-3 left-3 select-none rounded-md border border-zinc-800 bg-zinc-900/95 px-3 py-1.5 text-[11px] text-zinc-500 backdrop-blur">
-          휠: 줌 · Space + 드래그: 팬 · 클릭: 선택 · 드래그: 이동 · 빈 곳 드래그: 영역 선택 ·
-          Ctrl+클릭: 선택 추가/해제 · 핸들: 크기(Shift: 자유 비율)·회전 · Ctrl+D: 복제 · R: 90° 회전
-          · Del: 삭제 · Ctrl+Z/Y: 실행취소·다시실행 · 이미지 드롭: 배치
+          휠: 줌 · Space/휠 클릭 + 드래그: 팬 · 클릭: 선택 · 드래그: 이동 · 빈 곳 드래그: 영역 선택
+          · Ctrl+클릭: 선택 추가/해제 · 핸들: 크기(Shift: 자유 비율)·회전 · Ctrl+D: 복제 · R: 90°
+          회전 · Del: 삭제 · Ctrl+Z/Y: 실행취소·다시실행 · 이미지 드롭: 배치
         </div>
       </div>
 
