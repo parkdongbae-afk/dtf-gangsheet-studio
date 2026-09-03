@@ -209,7 +209,7 @@ class SidecarManager {
           if (this.pending.delete(id)) {
             entry.reject(
               new Error(
-                `사이드카 ${method} 응답 대기 시간 초과(${timeoutMs}ms) — ${this.stderrTail}`
+                `메모리가 부족합니다. 사이드카 ${method} 응답 대기 시간 초과(${timeoutMs}ms) — ${this.stderrTail}`
               )
             )
           }

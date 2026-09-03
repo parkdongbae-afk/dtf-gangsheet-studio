@@ -40,7 +40,7 @@ export function ExportDialog({
 }: ExportDialogProps): React.JSX.Element {
   const [phase, setPhase] = useState<ExportPhase>('setup')
   const [format, setFormat] = useState<ExportFormat>('psd')
-  const [flatten, setFlatten] = useState(false)
+  const [flatten, setFlatten] = useState(true)
   const [progress, setProgress] = useState<ExportProgress | null>(null)
   const [result, setResult] = useState<ExportResult | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -241,6 +241,14 @@ export function ExportDialog({
               className="rounded-md border border-zinc-800 bg-zinc-950 px-3.5 py-1.5 text-xs text-zinc-300 transition-colors hover:bg-zinc-800 active:scale-95"
             >
               취소
+            </button>
+          ) : phase === 'done' ? (
+            <button
+              type="button"
+              onClick={onClose}
+              className="rounded-md bg-indigo-600 px-3.5 py-1.5 text-xs font-medium text-white transition-colors hover:bg-indigo-500 active:scale-95"
+            >
+              닫기
             </button>
           ) : (
             <>
