@@ -1,7 +1,25 @@
 # summary.md — DTF GangSheet Studio 진행 상황
-갱신: 2026-09-03 / 완료: 속성 패널 "사용자 메뉴얼 (PDF)" 버튼 + 메뉴얼 번들·설치본 교체 / 이전: 한글 레이어명 PSD 크래시 수정(luni 보존)
+갱신: 2026-09-03 / 완료: 마키 다중 선택 + Ctrl 토글 + 다중 정렬(.agent/tech.md) / 이전: 속성 패널 "사용자 메뉴얼 (PDF)" 버튼 + 메뉴얼 번들·설치본 교체
 
 ## 현재 상태
+- **다중 선택·정렬 (2026-09-03 요청 — .agent/tech.md TECH-2026-0903 구현)**: 빈 곳 드래그
+  마키 영역 선택(AABB 부분 교차 — 1px 접촉 즉시 선택, 회전 항목은 노출 bbox 기준,
+  Ctrl 드래그=기존 선택 합산), Ctrl/Cmd+클릭 토글(추가/개별 해제 — 다중 구성원 재클릭은
+  그룹 유지), 빈 곳 일반 클릭=전체 해제. 다중 선택 시 속성 패널 편집 UI를 **정렬 패널**로
+  대체: 6종 정렬(좌/가로중앙/우/상/세로중앙/하) + 수평·수직 균등 분배(3개 이상, 회전 bbox
+  기준 평행이동 — 회전·치수 불변, undo 1단계). 그룹 드래그(다중 구성원 1개 잡고 함께
+  이동 — 델타 동기화 후 단일 커밋), Del 다중 삭제·R 다중 90° 회전·Ctrl+D 블록 복제,
+  트랜스포머 다중=합집합 보더만(리사이즈·회전 핸들 비활성 — 단일 선택 시 종전대로),
+  선택 항목 스트로크 하이라이트(줌 보정 화면 2px).
+- **구현**: alignment.ts 신규 순수 함수 — rotatedBBox(Konva 원점 피벗 규약 —
+  placement.ts·renderer.py와 동일 수학), marqueeSelection(TECH §4.1), alignItems
+  (TECH §4.3 일반화). ProxyCanvas selectedIds[] 다중 모델 전환(undo/redo 선택 필터
+  유지), 마키 레이어(반투명+대시), E2E 훅 dtf:import-paths 커스텀 이벤트
+  (DTF_SMOKE_TEST 패턴 — 파일 대화상자 자동화 불가 대응 씬 주입).
+- **검증**: Vitest 122(신규 17 — bbox 사분면/마키 부분교차·정규화/정렬 6종/분배 H·V/
+  조건 미달) · lint 0 · typecheck 0 · playwright-core Electron E2E 8시나리오 실기동
+  (마키 다중 선택·Ctrl 해제/재추가·좌측 정렬+Ctrl+Z 선택 유지·그룹 드래그+undo·
+  Del 다중 삭제) 콘솔/페이지 오류 0.
 - **메뉴얼 버튼·번들 (2026-09-03 요청)**: 속성 패널 푸터(선택 유무 무관 상시 노출)에
   "사용자 메뉴얼 (PDF)" 버튼(BookOpen 아이콘) 추가 → `util:open-manual-pdf` IPC로
   번들 PDF를 기본 뷰어로 open. openGuidePdf.ts를 채널·파일명 파라미터화된
