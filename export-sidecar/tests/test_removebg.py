@@ -98,6 +98,35 @@ def test_get_session_creates_once_per_model(
     assert created == ["stub-a", "stub-b"]  # new_session 호출 = 모델 수
 
 
+def test_remove_background_oom_falls_back_to_no_matting(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """배치 연속 처리 OOM 회귀(2026-09-03 실측) — alpha_matting MemoryError 시
+    마팅 없는 경로로 재시도해 배치가 중단 없이 완료된다."""
+    import io
+
+    calls: list[bool] = []
+
+    def fake_remove(
+        _data: bytes, *, session: BaseSession, alpha_matting: bool, **_kw: object
+    ) -> bytes:
+        calls.append(alpha_matting)
+        if alpha_matting:
+            raise MemoryError("Unable to allocate 1.86 GiB")
+        buffer = io.BytesIO()
+        Image.new("RGBA", (8, 8), (9, 8, 7, 255)).save(buffer, format="PNG")
+        return buffer.getvalue()
+
+    monkeypatch.setattr("rembg.remove", fake_remove)
+
+    result = removebg.remove_background_dtf(
+        b"stub", session=BaseSession.__new__(BaseSession)
+    )
+
+    assert calls == [True, False]  # 마팅 시도 → OOM → 비마팅 재시도
+    assert result.width_px == 8 and result.height_px == 8
+
+
 # --- 서버 remove_bg 디스패치 (경로 계약 — STDIO_GUIDE) ---
 
 

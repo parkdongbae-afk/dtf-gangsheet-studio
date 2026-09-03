@@ -90,14 +90,19 @@ def remove_background_dtf(
     alpha_matting으로 경계를 부드럽게 다듬고(REMOVEBG.MD §3 스펙 파라미터),
     이후 알파 경계를 ``defringe_px``만큼 침식시켜 흰색 테두리를 제거한다.
     고해상도 처리 직후 ``del`` + ``gc.collect()``로 메모리 피크를 수거한다(§5).
+
+    CPU alpha_matting(pymatting)은 트림맵 미지정 픽셀 수에 비례해 수 GiB 단일
+    할당을 요구할 수 있어, 세션이 상주한 연속 처리(배치) 2건째부터 MemoryError가
+    실측되었다(2026-09-03 일괄 처리 E2E). OOM 시에만 alpha_matting을 끈 경로
+    (모델 마스크 직용)로 재시도해 배치가 중단 없이 이어지게 한다.
     """
     from rembg import remove
 
-    try:
+    def run(alpha_matting: bool) -> bytes:
         raw: object = remove(
             input_bytes,
             session=session,
-            alpha_matting=True,
+            alpha_matting=alpha_matting,
             alpha_matting_foreground_threshold=ALPHA_MATTING_FOREGROUND_THRESHOLD,
             alpha_matting_background_threshold=ALPHA_MATTING_BACKGROUND_THRESHOLD,
             alpha_matting_erode_size=ALPHA_MATTING_ERODE_SIZE,
@@ -105,10 +110,17 @@ def remove_background_dtf(
         # rembg remove()의 반환 어노테이션은 입력 타입별 유니온 — bytes 입력은 bytes 반환
         if not isinstance(raw, bytes):
             raise RemoveBgError(f"unexpected rembg output type: {type(raw).__name__}")
-        img = Image.open(io.BytesIO(raw)).convert("RGBA")
+        return raw
+
+    try:
+        try:
+            raw = run(alpha_matting=True)
+        except MemoryError:
+            raw = run(alpha_matting=False)
     except (UnidentifiedImageError, ValueError, OSError) as exc:
-        # 디코드 불가 입력 — 클라이언트 문제(INVALID_PARAMS)로 분류
+        # 디코딩 불가 입력 — 클라이언트 문제(INVALID_PARAMS)로 분류
         raise RemoveBgError(f"cannot decode input image: {exc}") from exc
+    img = Image.open(io.BytesIO(raw)).convert("RGBA")
     del raw  # 원본·rembg 출력 버퍼 이중 상태 해소
 
     try:
