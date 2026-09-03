@@ -55,6 +55,15 @@ const requirePositiveInt = (
   return value
 }
 
+/** 항목 치수 — 리사이즈·비율 연산 결과는 소수(예: 1206.99…px)가 정상이므로 정수 강제 금지 */
+const requirePositive = (container: Record<string, unknown>, key: string, label: string): number => {
+  const value = container[key]
+  if (!isFiniteNumber(value) || value <= 0) {
+    throw new ProjectFormatError(`${label} must be a positive number, got ${String(value)}`)
+  }
+  return value
+}
+
 const requireFinite = (container: Record<string, unknown>, key: string, label: string): number => {
   const value = container[key]
   if (!isFiniteNumber(value)) {
@@ -109,8 +118,8 @@ export function validateProjectData(raw: unknown): ProjectData {
     return {
       id: item.id,
       filePath: item.filePath,
-      widthPx: requirePositiveInt(item, 'widthPx', `${label}.widthPx`),
-      heightPx: requirePositiveInt(item, 'heightPx', `${label}.heightPx`),
+      widthPx: requirePositive(item, 'widthPx', `${label}.widthPx`),
+      heightPx: requirePositive(item, 'heightPx', `${label}.heightPx`),
       x: requireFinite(item, 'x', `${label}.x`),
       y: requireFinite(item, 'y', `${label}.y`),
       rotation: requireFinite(item, 'rotation', `${label}.rotation`)

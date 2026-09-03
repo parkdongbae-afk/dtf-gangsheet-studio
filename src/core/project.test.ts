@@ -41,6 +41,13 @@ describe('validateProjectData — 정상 스키마', () => {
   it('음수 좌표·회전·소수 x/y 허용 (캔버스 밖 배치 대비)', () => {
     expect(() => validateProjectData(validProject())).not.toThrow()
   })
+
+  it('이미지 치수 소수 허용 — 리사이즈·비율 연산 결과(2026-09-03 접수: 1206.99…px 거부 결함)', () => {
+    const raw = validProject()
+    raw.images[0].heightPx = 1206.9961977186313
+    raw.images[0].widthPx = 1809.5
+    expect(() => validateProjectData(raw)).not.toThrow()
+  })
 })
 
 describe('validateProjectData — 스키마 위반 거부', () => {
@@ -66,7 +73,7 @@ describe('validateProjectData — 스키마 위반 거부', () => {
     expect(() => validateProjectData(raw)).toThrow(/PSD/)
   })
 
-  it('이미지 항목 — id·filePath 빈 문자열 거부, 치수 양의 정수 강제', () => {
+  it('이미지 항목 — id·filePath 빈 문자열 거부, 치수 양수 강제(0·음수 거부, 소수는 허용)', () => {
     const badId = validProject()
     badId.images[0].id = ''
     expect(() => validateProjectData(badId)).toThrow(/id/)
@@ -75,9 +82,11 @@ describe('validateProjectData — 스키마 위반 거부', () => {
     badPath.images[0].filePath = ''
     expect(() => validateProjectData(badPath)).toThrow(/filePath/)
 
-    const badDim = validProject()
-    badDim.images[0].widthPx = 0
-    expect(() => validateProjectData(badDim)).toThrow(/widthPx/)
+    for (const bad of [0, -1, NaN, Infinity]) {
+      const badDim = validProject()
+      badDim.images[0].widthPx = bad
+      expect(() => validateProjectData(badDim), `widthPx=${String(bad)}`).toThrow(/widthPx/)
+    }
   })
 
   it('이미지 x/y/rotation — 유한수 강제 (NaN 거부)', () => {
