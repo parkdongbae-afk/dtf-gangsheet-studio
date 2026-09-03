@@ -68,7 +68,7 @@ export function makePreview(absPath: string): ImportedImage {
 /** DPI 메타데이터(pHYs/JFIF) 탐색에 읽을 헤더 상한 — 두 메타데이터 모두 선두 청크에 있다 */
 const DPI_HEADER_BYTES = 65_536
 
-function readHeaderBytes(absPath: string, maxBytes: number): Uint8Array {
+export function readHeaderBytes(absPath: string, maxBytes: number): Uint8Array {
   const fd = openSync(absPath, 'r')
   try {
     const buf = Buffer.alloc(maxBytes)

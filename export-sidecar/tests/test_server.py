@@ -97,6 +97,79 @@ def test_unknown_method_maps_to_32601() -> None:
     assert error["code"] == server.METHOD_NOT_FOUND
 
 
+# --- auto_trim 디스패치 (autotrim.py 경로 계약) ---
+
+
+def _trimmed_png(path: Path) -> Path:
+    """100×80 캔버스에 (10,20)-(60,60) 불투명 박스 — 50×40으로 트림되는 입력."""
+    img = Image.new("RGBA", (100, 80), (0, 0, 0, 0))
+    px = img.load()
+    for y in range(20, 60):
+        for x in range(10, 60):
+            px[x, y] = (10, 200, 30, 255)
+    img.save(path)
+    return path
+
+
+def test_auto_trim_returns_metadata_only(tmp_path: Path) -> None:
+    src = _trimmed_png(tmp_path / "in.png")
+    out = tmp_path / "trimmed.png"
+    response = server.handle_message(
+        _rpc("auto_trim", {"input_path": str(src), "output_path": str(out)})
+    )
+    assert response is not None
+    result = response["result"]
+    assert isinstance(result, dict)
+    assert result["output_path"] == str(out)
+    assert result["width_px"] == 50
+    assert result["height_px"] == 40
+    assert result["trimmed"] is True
+    assert out.is_file()
+    assert "\n" not in json.dumps(response, ensure_ascii=False)  # NDJSON 1줄 계약
+
+
+def test_auto_trim_noop_returns_original_metadata(tmp_path: Path) -> None:
+    """여백 없는 원본 — trimmed=false·원본 경로, 출력 파일 미생성."""
+    src = tmp_path / "full.png"
+    Image.new("RGBA", (64, 32), (10, 200, 30, 255)).save(src)
+    out = tmp_path / "trimmed.png"
+    response = server.handle_message(
+        _rpc("auto_trim", {"input_path": str(src), "output_path": str(out)})
+    )
+    assert response is not None
+    result = response["result"]
+    assert isinstance(result, dict)
+    assert result["trimmed"] is False
+    assert result["output_path"] == str(src)
+    assert not out.exists()
+
+
+def test_auto_trim_invalid_threshold_maps_to_32602(tmp_path: Path) -> None:
+    src = _trimmed_png(tmp_path / "in.png")
+    response = server.handle_message(
+        _rpc(
+            "auto_trim",
+            {
+                "input_path": str(src),
+                "output_path": str(tmp_path / "out.png"),
+                "alpha_threshold": 999,
+            },
+        )
+    )
+    assert response is not None
+    error = response["error"]
+    assert isinstance(error, dict)
+    assert error["code"] == server.INVALID_PARAMS
+
+
+def test_auto_trim_non_object_params_maps_to_32602() -> None:
+    response = server.handle_message(_rpc("auto_trim", "not-an-object"))
+    assert response is not None
+    error = response["error"]
+    assert isinstance(error, dict)
+    assert error["code"] == server.INVALID_PARAMS
+
+
 def test_internal_error_maps_to_32603(
     tmp_path: Path, sample_png: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

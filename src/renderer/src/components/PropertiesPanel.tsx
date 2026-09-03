@@ -27,7 +27,8 @@ import {
   Move,
   RotateCw,
   Scale,
-  Unlock
+  Unlock,
+  ZoomIn
 } from 'lucide-react'
 import { cmToPx, pxToCm } from '../../../core/math'
 import { normalizeRotation, type LayerOrderOp } from './canvas/placement'
@@ -57,6 +58,8 @@ export interface PropertiesPanelProps {
   removeProgress: { current: number; total: number } | null
   /** 배경 제거 사이트 다이얼로그 열기 */
   onOpenBgSites: () => void
+  /** 업스케일 다이얼로그 열기 — 단일 선택 편집 패널에서만 노출 */
+  onOpenUpscale: () => void
 }
 
 function Section({
@@ -204,7 +207,8 @@ export function PropertiesPanel({
   onRemoveBg,
   removeBusy,
   removeProgress,
-  onOpenBgSites
+  onOpenBgSites,
+  onOpenUpscale
 }: PropertiesPanelProps): React.JSX.Element {
   const [linked, setLinked] = useState(true)
   const multi = !item && multiSelectedCount >= 2
@@ -588,6 +592,24 @@ export function PropertiesPanel({
               <Globe size={13} strokeWidth={1.5} className="text-zinc-400" />
               배경 제거 사이트…
             </button>
+          </Section>
+
+          <Section
+            title="업스케일"
+            icon={<ZoomIn size={ICON.size} strokeWidth={ICON.strokeWidth} />}
+          >
+            <button
+              type="button"
+              onClick={onOpenUpscale}
+              className="flex w-full items-center justify-center gap-2 rounded-md border border-indigo-500 bg-indigo-500/15 py-2 text-xs font-medium text-indigo-300 transition-colors hover:bg-indigo-500/25 active:scale-95"
+            >
+              <ZoomIn size={ICON.size} strokeWidth={ICON.strokeWidth} />
+              업스케일…
+            </button>
+            <p className="mt-2 text-[10px] leading-relaxed text-zinc-500">
+              원본이 작아 인쇄 시 흐릿하다면 AI로 키우세요. 최종 크기를 cm로 정하면 필요한 해상도를
+              자동으로 계산합니다. Ctrl+Z로 되돌릴 수 있습니다.
+            </p>
           </Section>
 
           <Section

@@ -24,7 +24,7 @@ build-backend = "hatchling.build"
 
 # 평면 모듈 구조(CLAUDE.md §2.1): 패키지 디렉터리 없이 최상위 모듈로 배포
 [tool.hatch.build.targets.wheel]
-only-include = ["renderer.py", "color.py", "psd_writer.py", "server.py", "removebg.py"]
+only-include = ["renderer.py", "color.py", "psd_writer.py", "server.py", "removebg.py", "autotrim.py", "upscale.py"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

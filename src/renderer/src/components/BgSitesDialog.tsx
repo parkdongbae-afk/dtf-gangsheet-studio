@@ -139,6 +139,17 @@ export function BgSitesDialog({ onClose }: BgSitesDialogProps): React.JSX.Elemen
             <span className="flex-1 text-left">포토샵 클라우드 가이드 (PDF)</span>
             <ExternalLink size={11} strokeWidth={1.5} className="shrink-0 text-zinc-600" />
           </button>
+
+          <button
+            type="button"
+            onClick={() => void window.api?.openBgGuide()}
+            title="번들된 Adobe Express 배경 제거 가이드 PDF를 기본 뷰어로 엽니다"
+            className="flex items-center gap-2 rounded-md border border-zinc-800 bg-zinc-950 px-3 py-2.5 text-xs text-zinc-300 transition-colors hover:bg-zinc-800 active:scale-[0.98]"
+          >
+            <FileText size={13} strokeWidth={1.5} className="shrink-0 text-zinc-400" />
+            <span className="flex-1 text-left">Adobe Express 배경 제거 가이드 (PDF)</span>
+            <ExternalLink size={11} strokeWidth={1.5} className="shrink-0 text-zinc-600" />
+          </button>
         </div>
 
         <div className="mt-3 flex justify-end">

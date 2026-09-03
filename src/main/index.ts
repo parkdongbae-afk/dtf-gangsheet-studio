@@ -5,6 +5,8 @@ import icon from '../../resources/icon.png?asset'
 import { registerImageImportIpc } from './ipc/imageImport'
 import { registerExportIpc, runExportTestHook, warmupRemoveBgSidecar } from './ipc/export'
 import { registerRemoveBgIpc } from './ipc/removeBg'
+import { registerAutoTrimIpc } from './ipc/autoTrim'
+import { registerUpscaleIpc } from './ipc/upscale'
 import { registerGuidePdfIpc } from './ipc/openGuidePdf'
 import { registerProjectIpc } from './ipc/projectFile'
 
@@ -66,6 +68,8 @@ app.whenReady().then(() => {
   registerImageImportIpc()
   registerExportIpc()
   registerRemoveBgIpc()
+  registerAutoTrimIpc()
+  registerUpscaleIpc()
   registerGuidePdfIpc()
   registerProjectIpc()
 

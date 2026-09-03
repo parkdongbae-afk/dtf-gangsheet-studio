@@ -17,6 +17,7 @@ import {
   Plus,
   Redo2,
   Save,
+  Scissors,
   Shrink,
   Undo2
 } from 'lucide-react'
@@ -27,6 +28,7 @@ import { GridSettingsDialog } from './GridSettingsDialog'
 import { NestingDialog } from './NestingDialog'
 import { RulerOverlay } from './RulerOverlay'
 import { BgSitesDialog } from '../BgSitesDialog'
+import { UpscaleDialog } from '../UpscaleDialog'
 import { packImages } from './autoNesting'
 import {
   alignItems,
@@ -77,6 +79,7 @@ import { useHtmlImage } from './useHtmlImage'
 import { PropertiesPanel } from '../PropertiesPanel'
 import { mmToPx, pxToMm } from '../../../../core/math'
 import { physicalDocPixels } from '../../../../core/imageMeta'
+import type { ImportedImage, UpscaledImage } from '../../../../types/ipc'
 import { PROJECT_FORMAT, PROJECT_VERSION, type ProjectData } from '../../../../core/project'
 
 /**
@@ -252,6 +255,8 @@ export function ProxyCanvas({
   const [gridOpen, setGridOpen] = useState(false)
   const [gridSettingsOpen, setGridSettingsOpen] = useState(false)
   const [bgSitesOpen, setBgSitesOpen] = useState(false)
+  /** 업스케일 대화상자 — 열림 시점의 항목 id·원본 경로를 캡처해 치환 정합성 유지 */
+  const [upscaleTarget, setUpscaleTarget] = useState<{ id: string; filePath: string } | null>(null)
   const [exportOpen, setExportOpen] = useState(false)
   const [nestingOpen, setNestingOpen] = useState(false)
   /** 방향키 이동 거리 (mm) — 1mm 단위 조절, 기본 5mm */
@@ -262,6 +267,27 @@ export function ProxyCanvas({
   const [gridSettings, setGridSettings] = useState<GridSettings>(DEFAULT_GRID_SETTINGS)
   /** 문서 배경 체커보드 표시 — 흰색 배경 이미지의 경계 식별용 보기 옵션(표시 전용) */
   const [checkerBg, setCheckerBg] = useState(false)
+  /**
+   * 투명 여백 자동 제거(Auto-Trim) — 이미지 가져오기 시 알파 바운딩 박스로 크롭해
+   * 배치·정렬 간격이 피사체 기준이 되게 한다. 기본 ON, 선택값은 localStorage 저장.
+   */
+  const [autoTrim, setAutoTrim] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('dtf:auto-trim') !== 'off'
+    } catch {
+      return true
+    }
+  })
+  const toggleAutoTrim = useCallback((): void => {
+    setAutoTrim((prev) => {
+      try {
+        localStorage.setItem('dtf:auto-trim', prev ? 'off' : 'on')
+      } catch {
+        /* 저장 실패는 세션 내 상태로만 동작 */
+      }
+      return !prev
+    })
+  }, [])
   /** 휠 클릭(중앙 버튼) 드래그 팬 진행 중 — 커서 표시용 */
   const [panning, setPanning] = useState(false)
   /** 배경 제거 진행 중 — 사이드카 추론 동안 버튼 잠금 */
@@ -451,6 +477,7 @@ export function ProxyCanvas({
         bgSitesOpen ||
         exportOpen ||
         nestingOpen ||
+        upscaleTarget !== null ||
         isEditableTarget(e.target)
       )
         return
@@ -471,7 +498,7 @@ export function ProxyCanvas({
       window.removeEventListener('keyup', onKeyUp)
       window.removeEventListener('blur', onBlur)
     }
-  }, [gridOpen, gridSettingsOpen, bgSitesOpen, exportOpen, nestingOpen])
+  }, [gridOpen, gridSettingsOpen, bgSitesOpen, exportOpen, nestingOpen, upscaleTarget])
 
   /**
    * .dtf 프로젝트 저장 — 씬을 dataUrl 없는 스키마로 직렬화해 메인에 위임
@@ -644,7 +671,15 @@ export function ProxyCanvas({
    * 대화상자 모달 중·텍스트 입력 포커스 중·드래그 진행 중에는 전면 무시한다.
    */
   useEffect(() => {
-    if (gridOpen || gridSettingsOpen || bgSitesOpen || exportOpen || nestingOpen) return
+    if (
+      gridOpen ||
+      gridSettingsOpen ||
+      bgSitesOpen ||
+      exportOpen ||
+      nestingOpen ||
+      upscaleTarget !== null
+    )
+      return
     const onKeyDown = (e: KeyboardEvent): void => {
       if (isEditableTarget(e.target)) return
       if (dragRef.current !== null) return
@@ -727,6 +762,7 @@ export function ProxyCanvas({
     bgSitesOpen,
     exportOpen,
     nestingOpen,
+    upscaleTarget,
     commitImages,
     undo,
     redo,
@@ -1383,20 +1419,61 @@ export function ProxyCanvas({
     })()
   }, [images, selectedIds, removeBusy, setImages, commitImages])
 
+  /**
+   * 업스케일 완료 치환 — 결과(DPI 메타 포함 PNG)를 새 에셋으로 교체한다(removeBg
+   * 치환 정책). 치수는 결과 물리 DPI 기준 문서 px로 환산하고, 기존 씬 배치의
+   * 중심점을 유지해 x/y를 보정한다(확대 후에도 피사체가 제자리에 보임).
+   */
+  const handleUpscaleDone = useCallback(
+    (result: UpscaledImage): void => {
+      setUpscaleTarget((target) => {
+        if (target !== null) {
+          const newW = physicalDocPixels(result.widthPx, result.dpi)
+          const newH = physicalDocPixels(result.heightPx, result.dpi)
+          commitImages((prev) =>
+            prev.map((img) =>
+              img.id === target.id
+                ? {
+                    ...img,
+                    filePath: result.filePath,
+                    dataUrl: result.dataUrl,
+                    widthPx: newW,
+                    heightPx: newH,
+                    x: img.x + (img.widthPx - newW) / 2,
+                    y: img.y + (img.heightPx - newH) / 2
+                  }
+                : img
+            )
+          )
+        }
+        return null
+      })
+    },
+    [commitImages]
+  )
+
   /** 경로들을 기준점 중심에 캐스케이드 배치해 씬에 추가 — 원본 DPI 메타데이터가
-   *  있으면 물리 크기(실제 cm)를 보존해 350 DPI 문서 px으로 환산해 배치한다. */
+   *  있으면 물리 크기(실제 cm)를 보존해 350 DPI 문서 px으로 환산해 배치한다.
+   *  Auto-Trim 켜짐: 먼저 알파 바운딩 박스로 크롭된 PNG를 새 원본으로 삼는다
+   *  (완전 투명·여백 없음이면 사이드카가 원본을 그대로 돌려준다). 앵커 갱신 —
+   *  centeredTopLeft가 "잘린 후 치수"로 좌상단을 다시 계산하므로 보이는 피사체의
+   *  중심이 기준점(드롭 지점·뷰 중심)에 그대로 유지되고 width/height만 갱신된다.
+   *  트림 실패(사이드카 오류)는 원본 임포트로 폴백 — 기능 장애가 가져오기를 막지 않게. */
   const importPaths = useCallback(
     async (paths: string[], center: DocPoint): Promise<void> => {
       try {
         const placed: PlacedImage[] = []
         for (let i = 0; i < paths.length; i++) {
-          const imported = await window.api.importImage(paths[i])
+          const trimmed = autoTrim
+            ? await window.api.autoTrimImage(paths[i]).catch(() => null)
+            : null
+          const imported: ImportedImage = trimmed ?? (await window.api.importImage(paths[i]))
           const docWidthPx = physicalDocPixels(imported.widthPx, imported.dpi)
           const docHeightPx = physicalDocPixels(imported.heightPx, imported.dpi)
           const topLeft = centeredTopLeft(docWidthPx, docHeightPx, center, i, view.scale)
           placed.push({
             id: crypto.randomUUID(),
-            filePath: paths[i],
+            filePath: trimmed?.filePath ?? paths[i],
             dataUrl: imported.dataUrl,
             widthPx: docWidthPx,
             heightPx: docHeightPx,
@@ -1410,7 +1487,7 @@ export function ProxyCanvas({
         alert(`이미지 가져오기 실패: ${err instanceof Error ? err.message : String(err)}`)
       }
     },
-    [view.scale, commitImages]
+    [autoTrim, view.scale, commitImages]
   )
 
   /**
@@ -1686,6 +1763,14 @@ export function ProxyCanvas({
               <ImagePlus size={14} strokeWidth={1.5} />
               가져오기
             </OverlayButton>
+            <OverlayButton
+              onClick={toggleAutoTrim}
+              active={autoTrim}
+              title="투명 여백 자동 제거 (Auto-Trim) — 이미지 가져오기 시 알파 경계로 잘라 배치 (토글)"
+            >
+              <Scissors size={14} strokeWidth={1.5} />
+              여백 제거
+            </OverlayButton>
             <OverlayButton onClick={() => void handleSave()} title="프로젝트 저장 (.dtf) — Ctrl+S">
               <Save size={14} strokeWidth={1.5} />
               저장
@@ -1786,6 +1871,13 @@ export function ProxyCanvas({
         )}
 
         {bgSitesOpen && <BgSitesDialog onClose={() => setBgSitesOpen(false)} />}
+        {upscaleTarget !== null && (
+          <UpscaleDialog
+            filePath={upscaleTarget.filePath}
+            onClose={() => setUpscaleTarget(null)}
+            onDone={handleUpscaleDone}
+          />
+        )}
 
         {nestingOpen && images.length > 0 && (
           <NestingDialog
@@ -1904,6 +1996,10 @@ export function ProxyCanvas({
         removeBusy={removeBusy}
         removeProgress={removeProgress}
         onOpenBgSites={() => setBgSitesOpen(true)}
+        onOpenUpscale={() => {
+          if (selectedItem)
+            setUpscaleTarget({ id: selectedItem.id, filePath: selectedItem.filePath })
+        }}
       />
     </div>
   )

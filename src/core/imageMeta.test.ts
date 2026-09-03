@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { extractImageDpi, physicalDocPixels } from './imageMeta'
+import { extractImageDpi, extractImageSize, physicalDocPixels } from './imageMeta'
 
 /** PNG 헤더 조립 — 시그니처 + IHDR + (선택) pHYs. CRC는 파서가 안 읽으므로 0 채움 */
 function buildPng(chunk: 'pHYs' | 'none', xppm?: number, unit?: number): Uint8Array {
@@ -142,5 +142,111 @@ describe('physicalDocPixels — 물리 크기 보존 환산', () => {
   it('dpi 없음·무효 → 원본 픽셀 그대로 (기존 동작 하위 호환)', () => {
     expect(physicalDocPixels(1000, undefined)).toBe(1000)
     expect(physicalDocPixels(1000, 0)).toBe(1000)
+  })
+})
+
+/** JPEG SOF0 세그먼트 조립 — 치수 파싱 검증용 (픽셀 데이터 없음) */
+function buildJpegWithSof(width: number, height: number): Uint8Array {
+  const sof = [
+    0xff,
+    0xc0,
+    0,
+    17,
+    8,
+    (height >> 8) & 0xff,
+    height & 0xff,
+    (width >> 8) & 0xff,
+    width & 0xff
+  ]
+  const app0 = buildJpeg(1, 300)
+  return new Uint8Array([...app0.slice(0, -2), ...sof, 0xff, 0xd9])
+}
+
+/** WebP 헤더 조립 — chunk 종류별 치수 레이아웃 검증용 */
+function buildWebP(chunk: 'VP8X' | 'VP8 ' | 'VP8L', width: number, height: number): Uint8Array {
+  const head = [0x52, 0x49, 0x46, 0x46, 0, 0, 0, 0, 0x57, 0x45, 0x42, 0x50]
+  const tag = chunk.split('').map((c) => c.charCodeAt(0))
+  const body: number[] = []
+  if (chunk === 'VP8X') {
+    body.push(
+      0,
+      0,
+      0,
+      0, // chunk size(자리만)
+      0,
+      0,
+      0,
+      0, // flags/reserved
+      (width - 1) & 0xff,
+      ((width - 1) >> 8) & 0xff,
+      ((width - 1) >> 16) & 0xff,
+      (height - 1) & 0xff,
+      ((height - 1) >> 8) & 0xff,
+      ((height - 1) >> 16) & 0xff
+    )
+  } else if (chunk === 'VP8 ') {
+    body.push(
+      0,
+      0,
+      0,
+      0, // chunk size
+      0x30,
+      0x01,
+      0x00, // frame tag
+      0x9d,
+      0x01,
+      0x2a, // start code
+      width & 0xff,
+      (width >> 8) & 0x3f,
+      height & 0xff,
+      (height >> 8) & 0x3f
+    )
+  } else {
+    const w1 = width - 1
+    const h1 = height - 1
+    body.push(
+      0,
+      0,
+      0,
+      0, // chunk size
+      0x2f, // VP8L signature
+      w1 & 0xff,
+      ((w1 >> 8) & 0x3f) | ((h1 & 0x3) << 6),
+      (h1 >> 2) & 0xff,
+      (h1 >> 10) & 0x03
+    )
+  }
+  return new Uint8Array([...head, ...tag, ...body])
+}
+
+describe('extractImageSize — 업스케일 예상 패널용 치수 파싱', () => {
+  it('PNG IHDR → 치수', () => {
+    expect(extractImageSize(buildPng('none'))).toEqual({ width: 10, height: 10 })
+    expect(extractImageSize(buildPng('pHYs', 5906, 1))).toEqual({ width: 10, height: 10 })
+  })
+
+  it('JPEG SOF0 → 치수', () => {
+    expect(extractImageSize(buildJpegWithSof(4000, 3000))).toEqual({ width: 4000, height: 3000 })
+  })
+
+  it('JPEG SOF 없음(헤더만) → null', () => {
+    expect(extractImageSize(buildJpeg(1, 300))).toBeNull()
+  })
+
+  it('WebP VP8X(확장) → 치수', () => {
+    expect(extractImageSize(buildWebP('VP8X', 641, 481))).toEqual({ width: 641, height: 481 })
+  })
+
+  it('WebP VP8(손실) → 치수', () => {
+    expect(extractImageSize(buildWebP('VP8 ', 640, 480))).toEqual({ width: 640, height: 480 })
+  })
+
+  it('WebP VP8L(무손실) → 치수', () => {
+    expect(extractImageSize(buildWebP('VP8L', 641, 481))).toEqual({ width: 641, height: 481 })
+  })
+
+  it('미지원 형식·빈 입력 → null', () => {
+    expect(extractImageSize(new Uint8Array([0x42, 0x4d, 0, 0]))).toBeNull() // BMP
+    expect(extractImageSize(new Uint8Array(4))).toBeNull()
   })
 })

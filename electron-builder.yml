@@ -36,6 +36,9 @@ extraResources:
   # 오픈소스 라이선스 고지(MIT/Apache/BSD 등 전문) — 설치 폴더 배치 + 앱 내 열기
   - from: resources/THIRD_PARTY_LICENSES.txt
     to: THIRD_PARTY_LICENSES.txt
+  # 배경 제거 사이트 다이얼로그 "Adobe Express 배경 제거 가이드" 버튼용 PDF
+  - from: resources/adobe_express_background_removal_guide.pdf
+    to: adobe_express_background_removal_guide.pdf
 win:
   executableName: DTFGangSheetStudio
   icon: build/icon.ico

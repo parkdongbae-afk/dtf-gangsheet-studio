@@ -18,15 +18,27 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join, extname } from 'node:path'
 import { createInterface } from 'node:readline'
 import type { ExportManifest } from '../../workers/exportManifest'
-import type { ExportProgress, ExportResult, RemoveBgSidecarResult } from '../../types/ipc'
+import type {
+  AutoTrimSidecarResult,
+  ExportProgress,
+  ExportResult,
+  RemoveBgSidecarResult,
+  UpscaleSidecarProgress,
+  UpscaleSidecarRequest,
+  UpscaleSidecarResult
+} from '../../types/ipc'
 import { saveDefaultPath, saveLastDir } from './dialogMemory'
 
 const PING_TIMEOUT_MS = 10_000
 const SHUTDOWN_TIMEOUT_MS = 3_000
 /** 배경 제거 상한 — 기본 모델(isnet, 약 170MB)은 번들·예열되므로 여유 포함 3분 */
 const REMOVE_BG_TIMEOUT_MS = 180_000
+/** 자동 트림 상한 — 디코드+numpy bbox+크롭 재인코딩(4K+ 여유) */
+const AUTO_TRIM_TIMEOUT_MS = 60_000
 /** 예열 상한 — 번들이 없는 첫 개발 실행은 가중치 다운로드까지 흡수한다 */
 const WARMUP_TIMEOUT_MS = 300_000
+/** 업스케일 상한 — 체인 전체(스텝별 상한은 사이드카가 5분으로 강제, §6.2) */
+const UPSCALE_TIMEOUT_MS = 20 * 60_000
 /** 번들 기본 모델 파일명 — export-sidecar/removebg.py DEFAULT_MODEL과 동기 */
 const DEFAULT_MODEL_FILE = 'isnet-general-use.onnx'
 /** 스폰 실패 진단용 stderr 꼬리 상한 */
@@ -52,6 +64,7 @@ class SidecarManager {
   /** 장기 작업 세마포어 — render·removeBg 상호 배타(사이드카는 단일 추론 프로세스) */
   private busy = false
   private onProgress: ((progress: ExportProgress) => void) | null = null
+  private upscaleProgressHandler: ((progress: UpscaleSidecarProgress) => void) | null = null
 
   /** 렌더 진행 — render 호출부가 설정, 렌더 종료 시 해제 */
   set onProgressHandler(handler: ((progress: ExportProgress) => void) | null) {
@@ -155,15 +168,32 @@ class SidecarManager {
   }
 
   private dispatchNotification(message: { method: string; params?: unknown }): void {
-    if (message.method !== 'progress' || !this.onProgress) return
-    const params = message.params as ExportProgress | undefined
+    if (message.method !== 'progress') return
+    const params = message.params as Record<string, unknown> | undefined
+    if (!params || typeof params.stage !== 'string') return
+    const { stage } = params
+    const isCounted = typeof params.current === 'number' && typeof params.total === 'number'
+    if (isCounted && (stage === 'items' || stage === 'write')) {
+      this.onProgress?.({
+        stage,
+        current: params.current,
+        total: params.total
+      } as ExportProgress)
+      return
+    }
     if (
-      params &&
-      (params.stage === 'items' || params.stage === 'write') &&
-      typeof params.current === 'number' &&
-      typeof params.total === 'number'
+      isCounted &&
+      (stage === 'step' || stage === 'tile' || stage === 'encode') &&
+      typeof params.step === 'number' &&
+      typeof params.total_steps === 'number'
     ) {
-      this.onProgress(params)
+      this.upscaleProgressHandler?.({
+        stage,
+        step: params.step,
+        total_steps: params.total_steps,
+        current: params.current,
+        total: params.total
+      } as UpscaleSidecarProgress)
     }
   }
 
@@ -283,6 +313,71 @@ class SidecarManager {
     }
   }
 
+  /** 투명 여백 자동 트림 — no-op(trimmed=false)이면 output_path는 입력 경로 그대로 */
+  async autoTrim(
+    inputPath: string,
+    outputPath: string,
+    alphaThreshold: number
+  ): Promise<AutoTrimSidecarResult> {
+    if (this.busy) throw new Error('사이드카 작업(내보내기·배경 제거)이 이미 진행 중입니다')
+    this.busy = true
+    try {
+      await this.ensureStarted()
+      const result = (await this.request(
+        'auto_trim',
+        {
+          input_path: inputPath,
+          output_path: outputPath,
+          alpha_threshold: alphaThreshold
+        },
+        AUTO_TRIM_TIMEOUT_MS
+      )) as Partial<AutoTrimSidecarResult>
+      if (
+        typeof result.output_path !== 'string' ||
+        typeof result.width_px !== 'number' ||
+        typeof result.height_px !== 'number' ||
+        typeof result.trimmed !== 'boolean'
+      ) {
+        throw new Error(`사이드카 응답 스키마 위반: ${JSON.stringify(result).slice(0, 300)}`)
+      }
+      return result as AutoTrimSidecarResult
+    } finally {
+      this.busy = false
+    }
+  }
+
+  /** 단계별 AI 업스케일 — 체인을 통째로 위임하고 step/tile/encode 진행을 발신.
+   *  스텝별 상한(5분)은 사이드카가 강제한다(§6.2). */
+  async upscale(
+    params: UpscaleSidecarRequest,
+    onProgress: (progress: UpscaleSidecarProgress) => void
+  ): Promise<UpscaleSidecarResult> {
+    if (this.busy) throw new Error('사이드카 작업(내보내기·배경 제거)이 이미 진행 중입니다')
+    this.busy = true
+    this.upscaleProgressHandler = onProgress
+    try {
+      await this.ensureStarted()
+      const result = (await this.request(
+        'upscale',
+        params,
+        UPSCALE_TIMEOUT_MS
+      )) as Partial<UpscaleSidecarResult>
+      if (
+        typeof result.output_path !== 'string' ||
+        typeof result.width_px !== 'number' ||
+        typeof result.height_px !== 'number' ||
+        typeof result.duration_ms !== 'number' ||
+        !Array.isArray(result.steps)
+      ) {
+        throw new Error(`사이드카 응답 스키마 위반: ${JSON.stringify(result).slice(0, 300)}`)
+      }
+      return result as UpscaleSidecarResult
+    } finally {
+      this.busy = false
+      this.upscaleProgressHandler = null
+    }
+  }
+
   /** 사이드카 예열 — 기본 모델 세션을 미리 로딩해 첫 remove_bg 대기를 흡수.
    *  busy를 잡지 않는다: 요청은 서버에서 순차 처리되므로 예열 도중 사용자가
    *  배경 제거를 누르면 두 요청이 파이프라인으로 이어지고 로딩 결과를 공유한다.
@@ -299,12 +394,13 @@ class SidecarManager {
   }
 
   /** 진행 중 렌더 취소 — 프로세스 종료로 pending 요청이 거부된다 */
-  cancel(): void {
+  cancel(reason: string = '내보내기가 취소되었습니다'): void {
     const child = this.child
     this.child = null
     this.stdin = null
+    this.upscaleProgressHandler = null
     if (child && !child.killed) child.kill()
-    this.failAllPending(new Error('내보내기가 취소되었습니다'))
+    this.failAllPending(new Error(reason))
   }
 
   /** 앱 종료 정리 — shutdown 요청 후 여유 시간 두고 kill */
@@ -334,6 +430,28 @@ export function removeBackgroundViaSidecar(
   outputPath: string
 ): Promise<RemoveBgSidecarResult> {
   return sidecar.removeBg(inputPath, outputPath)
+}
+
+/** 자동 트림 요청 진입점 — autoTrim.ts IPC가 사용 (사이드카 수명은 이 모듈이 소유) */
+export function autoTrimViaSidecar(
+  inputPath: string,
+  outputPath: string,
+  alphaThreshold: number
+): Promise<AutoTrimSidecarResult> {
+  return sidecar.autoTrim(inputPath, outputPath, alphaThreshold)
+}
+
+/** 업스케일 요청 진입점 — upscale.ts IPC가 사용 (사이드카 수명은 이 모듈이 소유) */
+export function upscaleViaSidecar(
+  params: UpscaleSidecarRequest,
+  onProgress: (progress: UpscaleSidecarProgress) => void
+): Promise<UpscaleSidecarResult> {
+  return sidecar.upscale(params, onProgress)
+}
+
+/** 진행 중 사이드카 작업 취소 — upscale:cancel IPC가 사용 */
+export function cancelSidecar(reason: string): void {
+  sidecar.cancel(reason)
 }
 
 /** 배경 제거 예열 — index.ts가 앱 구동 직후 호출(비동기, 실패 무시) */

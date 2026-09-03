@@ -24,6 +24,18 @@
   (removebg.py, v2). STDIO_GUIDE에 따라 **경로만 주고받는다** — 스펙
   (REMOVEBG.MD §4)의 Base64 스트리밍은 프로젝트 stdio 바이너리 금지
   철칙에 위배되어 경로 계약으로 조정. 첫 요청 시에만 모델 세션을 로딩한다.
+- ``upscale``: params = ``{input_path, output_path, chain, target_w, target_h,
+  fit_mode?, crop?, format?, quality?, dpi?, embed_dpi?, sharpen?, denoise?,
+  model?, tile_size?, overlap?, checkpoint_dir?, skip_steps?,
+  resume_from_path?}`` → 단계별 AI 업스케일 후 DPI 메타가 포함된 이미지를
+  기록한다(upscale.py, UPSCALER.MD v2.0). 체인은 메인 Plan Builder가 산출한
+  것을 그대로 받으며, 처리 중 ``step``/``tile``/``encode`` stage의 progress
+  알림을 발신한다. ``skip_steps`` > 0이면 ``resume_from_path`` 체크포인트
+  step{skip}.png에서 나머지 스텝만 이어 실행한다(§5.3 재개).
+- ``auto_trim``: params = ``{input_path, output_path, alpha_threshold?}`` →
+  알파 바운딩 박스(임계값 초과 픽셀 최외각)로 크롭한 PNG를 기록
+  (autotrim.py). no-op(완전 투명·여백 없음·알파 없는 포맷)은 원본
+  경로·치수를 ``trimmed=false``로 돌려준다.
 - ``warmup``: params = ``{model?}`` → 기본 모델 세션을 미리 로딩해 첫
   remove_bg 요청의 로딩 대기(수 초~수 분)를 앱 구동 시점으로 흡수한다.
   실패는 INVALID_PARAMS로 응답해 클라이언트가 요청 시 로딩으로 폴백하게 한다.
@@ -44,10 +56,14 @@ import sys
 from collections.abc import Callable, Mapping
 from typing import IO, Final
 
+import autotrim
 import removebg
 import renderer
+import upscale
+from autotrim import AutoTrimError
 from removebg import RemoveBgError
 from renderer import ManifestError
+from upscale import UpscaleError
 
 __version__ = "0.1.0"  # pyproject [project].version과 동기 유지
 
@@ -136,6 +152,10 @@ def _dispatch(
             result = _render_manifest(message.get("params"), notifier)
         elif method == "remove_bg":
             result = _remove_bg(message.get("params"))
+        elif method == "auto_trim":
+            result = _auto_trim(message.get("params"))
+        elif method == "upscale":
+            result = _upscale(message.get("params"), notifier)
         elif method == "warmup":
             result = _warmup(message.get("params"))
         elif method == "shutdown":
@@ -148,6 +168,10 @@ def _dispatch(
     except ManifestError as exc:  # 입력 문제 — 매니페스트 스키마·파일·치수
         return _notify_or_error(request_id, is_notification, INVALID_PARAMS, str(exc))
     except RemoveBgError as exc:  # 입력 문제 — 경로·모델명·디코드 실패 (remove_bg)
+        return _notify_or_error(request_id, is_notification, INVALID_PARAMS, str(exc))
+    except AutoTrimError as exc:  # 입력 문제 — 경로·디코드·임계값 실패 (auto_trim)
+        return _notify_or_error(request_id, is_notification, INVALID_PARAMS, str(exc))
+    except UpscaleError as exc:  # 입력 문제 — 경로·체인·치수·모델 다운로드 실패 (upscale)
         return _notify_or_error(request_id, is_notification, INVALID_PARAMS, str(exc))
     except Exception as exc:  # noqa: BLE001 — 프로세스 생존이 우선, 오류는 응답으로 전달
         detail = f"{type(exc).__name__}: {exc}"
@@ -213,6 +237,183 @@ def _remove_bg(params: object) -> dict[str, object]:
         "output_path": str(output_path),
         "width_px": result.width_px,
         "height_px": result.height_px,
+    }
+
+
+def _auto_trim(params: object) -> dict[str, object]:
+    """auto_trim 메서드 본문 — 경로 기반 투명 여백 트림, 응답은 메타데이터만.
+
+    no-op(완전 투명·여백 없음·알파 없는 포맷)도 정상 응답이다 — 원본 경로·
+    치수에 ``trimmed=false``만 붙여 돌려준다(클라이언트 폴백 불필요).
+    """
+    if not isinstance(params, Mapping):
+        raise AutoTrimError("'params' must be an object (auto_trim request)")
+    input_path = params.get("input_path")
+    output_path = params.get("output_path")
+    if not isinstance(input_path, str) or not input_path:
+        raise AutoTrimError("'input_path' must be a non-empty string")
+    if not isinstance(output_path, str) or not output_path:
+        raise AutoTrimError("'output_path' must be a non-empty string")
+    alpha_threshold = params.get("alpha_threshold", autotrim.DEFAULT_ALPHA_THRESHOLD)
+    if (
+        isinstance(alpha_threshold, bool)
+        or not isinstance(alpha_threshold, int)
+        or not 0 <= alpha_threshold <= autotrim.MAX_ALPHA_THRESHOLD
+    ):
+        raise AutoTrimError(
+            f"'alpha_threshold' must be an integer in 0..{autotrim.MAX_ALPHA_THRESHOLD}"
+        )
+
+    _log(f"auto_trim start: {input_path} -> {output_path} (threshold={alpha_threshold})")
+    result = autotrim.auto_trim_file(input_path, output_path, alpha_threshold)
+    _log(
+        f"auto_trim done: trimmed={result.trimmed}"
+        f" {result.width_px}x{result.height_px} -> {result.output_path}"
+    )
+    return {
+        "output_path": result.output_path,
+        "width_px": result.width_px,
+        "height_px": result.height_px,
+        "trimmed": result.trimmed,
+    }
+
+
+def _upscale(params: object, notifier: Notifier | None = None) -> dict[str, object]:
+    """upscale 메서드 본문 — 경로 기반 단계별 업스케일, 응답은 메타데이터만.
+
+    체인·타겋 치수는 이미 메인 Plan Builder(src/core/upscaler/plan.ts)가
+    검증·산출한 값이다. 여기서는 JSON 역직렬화 경계의 타입만 재검증한다.
+    스텝·타일·인코딩 진행은 progress 알림으로 발신한다(upscale.py → NDJSON).
+    """
+    if not isinstance(params, Mapping):
+        raise UpscaleError("'params' must be an object (upscale request)")
+    input_path = params.get("input_path")
+    output_path = params.get("output_path")
+    if not isinstance(input_path, str) or not input_path:
+        raise UpscaleError("'input_path' must be a non-empty string")
+    if not isinstance(output_path, str) or not output_path:
+        raise UpscaleError("'output_path' must be a non-empty string")
+
+    chain_raw = params.get("chain")
+    if not isinstance(chain_raw, list) or not chain_raw:
+        raise UpscaleError("'chain' must be a non-empty array of numbers")
+    chain = [float(s) for s in chain_raw]
+
+    target_w = params.get("target_w")
+    target_h = params.get("target_h")
+    if isinstance(target_w, bool) or not isinstance(target_w, int):
+        raise UpscaleError("'target_w' must be an integer")
+    if isinstance(target_h, bool) or not isinstance(target_h, int):
+        raise UpscaleError("'target_h' must be an integer")
+
+    fit_mode = params.get("fit_mode", "KEEP_RATIO")
+    if fit_mode not in ("KEEP_RATIO", "COVER", "CONTAIN", "STRETCH"):
+        raise UpscaleError(f"'fit_mode' must be one of KEEP_RATIO/COVER/CONTAIN/STRETCH: {fit_mode!r}")
+
+    crop_raw = params.get("crop")
+    crop: tuple[int, int, int, int] | None = None
+    if crop_raw is not None:
+        if not isinstance(crop_raw, Mapping):
+            raise UpscaleError("'crop' must be an object {x,y,w,h} or null")
+        parts = [crop_raw.get(key) for key in ("x", "y", "w", "h")]
+        if any(isinstance(v, bool) or not isinstance(v, int) for v in parts):
+            raise UpscaleError("'crop' values must be integers")
+        crop = (parts[0], parts[1], parts[2], parts[3])  # type: ignore[arg-type]
+
+    fmt = params.get("format", "png")
+    if fmt not in ("png", "jpeg", "webp"):
+        raise UpscaleError(f"'format' must be png/jpeg/webp: {fmt!r}")
+    quality = params.get("quality", 0.95)
+    if isinstance(quality, bool) or not isinstance(quality, (int, float)):
+        raise UpscaleError("'quality' must be a number in (0, 1]")
+    dpi = params.get("dpi", 300)
+    if isinstance(dpi, bool) or not isinstance(dpi, int):
+        raise UpscaleError("'dpi' must be an integer")
+    embed_dpi = params.get("embed_dpi", True)
+    if not isinstance(embed_dpi, bool):
+        raise UpscaleError("'embed_dpi' must be a boolean")
+    sharpen = params.get("sharpen", upscale.DEFAULT_SHARPEN)
+    if isinstance(sharpen, bool) or not isinstance(sharpen, (int, float)):
+        raise UpscaleError("'sharpen' must be a number in 0..1")
+    denoise = params.get("denoise", 0)
+    if isinstance(denoise, bool) or not isinstance(denoise, int):
+        raise UpscaleError("'denoise' must be 0, 1 or 2")
+    tile_size = params.get("tile_size")
+    if tile_size is not None and (isinstance(tile_size, bool) or not isinstance(tile_size, int)):
+        raise UpscaleError("'tile_size' must be an integer or null")
+    overlap = params.get("overlap")
+    if overlap is not None and (isinstance(overlap, bool) or not isinstance(overlap, int)):
+        raise UpscaleError("'overlap' must be an integer or null")
+    checkpoint_dir = params.get("checkpoint_dir")
+    if checkpoint_dir is not None and not isinstance(checkpoint_dir, str):
+        raise UpscaleError("'checkpoint_dir' must be a string or null")
+    model = params.get("model", upscale.DEFAULT_MODEL)
+    if not isinstance(model, str) or model not in upscale.MODEL_URLS:
+        raise UpscaleError(
+            f"'model' must be one of {sorted(upscale.MODEL_URLS)}: {model!r}"
+        )
+    resume_from_path = params.get("resume_from_path")
+    if resume_from_path is not None and not isinstance(resume_from_path, str):
+        raise UpscaleError("'resume_from_path' must be a string or null")
+    skip_steps = params.get("skip_steps", 0)
+    if isinstance(skip_steps, bool) or not isinstance(skip_steps, int):
+        raise UpscaleError("'skip_steps' must be an integer >= 0")
+
+    def on_progress(
+        stage: str, step: int, total_steps: int, current: int, total: int
+    ) -> None:
+        if notifier is not None:
+            notifier(
+                {
+                    "stage": stage,
+                    "step": step,
+                    "total_steps": total_steps,
+                    "current": current,
+                    "total": total,
+                }
+            )
+
+    _log(
+        f"upscale start: {input_path} -> {output_path}"
+        f" (chain={chain_raw}, {target_w}x{target_h}, model={model}, skip={skip_steps})"
+    )
+    result = upscale.process_file(
+        input_path,
+        output_path,
+        chain,
+        target_w,
+        target_h,
+        fit_mode=fit_mode,
+        crop=crop,
+        fmt=fmt,
+        quality=float(quality),
+        dpi=dpi,
+        embed_dpi=embed_dpi,
+        sharpen=float(sharpen),
+        denoise=denoise,
+        model=model,
+        tile=tile_size,
+        overlap=overlap,
+        checkpoint_dir=checkpoint_dir,
+        on_progress=on_progress,
+        resume_from=resume_from_path,
+        skip_steps=skip_steps,
+    )
+    _log(f"upscale done: {result.width_px}x{result.height_px}, {result.duration_ms} ms")
+    return {
+        "output_path": result.output_path,
+        "width_px": result.width_px,
+        "height_px": result.height_px,
+        "duration_ms": result.duration_ms,
+        "steps": [
+            {
+                "scale": record.scale,
+                "out_w": record.out_w,
+                "out_h": record.out_h,
+                "ms": record.ms,
+            }
+            for record in result.steps
+        ],
     }
 
 
