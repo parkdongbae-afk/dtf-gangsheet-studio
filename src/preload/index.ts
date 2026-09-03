@@ -1,8 +1,6 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import { electronAPI } from '@electron-toolkit/preload'
-import type { DtfApi, ExportProgress } from '../types/ipc'
-import type { ProjectData } from '../core/project'
-
+import type { DtfApi, ExportProgress, OpenedProject } from '../types/ipc'
 // Custom APIs for renderer — 경로만 주고받는다 (바이너리 IPC 금지)
 const api: DtfApi = {
   openImages: (): Promise<string[] | null> => ipcRenderer.invoke('dialog:open-images'),
@@ -20,11 +18,11 @@ const api: DtfApi = {
   },
   openGuidePdf: (): Promise<void> => ipcRenderer.invoke('util:open-guide-pdf'),
   openManualPdf: (): Promise<void> => ipcRenderer.invoke('util:open-manual-pdf'),
+  openLicenses: (): Promise<void> => ipcRenderer.invoke('util:open-licenses'),
   /** 현재 작업을 .dtf 프로젝트로 저장 — 다이얼로그 경로(취소 시 null). path는 E2E 주입용 */
-  saveProject: (data: ProjectData, path?: string): Promise<string | null> =>
-    ipcRenderer.invoke('project:save', data, path),
+  saveProject: (data, path) => ipcRenderer.invoke('project:save', data, path),
   /** .dtf 프로젝트 열기 — 다이얼로그(취소 시 null). path는 E2E 주입용 */
-  openProject: (path?: string): Promise<ProjectData | null> =>
+  openProject: (path?: string): Promise<OpenedProject | null> =>
     ipcRenderer.invoke('project:open', path)
 }
 

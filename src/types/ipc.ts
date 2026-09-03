@@ -6,6 +6,11 @@
  */
 import type { ProjectData } from '../core/project'
 
+/** 원본 이미지의 물리 DPI 메타데이터 — PNG pHYs/JPEG JFIF에서 추출 (없으면 undefined) */
+export interface ImageDpiMeta {
+  dpi: number
+}
+
 /** 이미지 임포트 결과 — 원본 크기는 350 DPI 절대 px 기준 */
 export interface ImportedImage {
   /** ≤2,048px PNG 프리뷰 (알파 보존) — 캔버스 표시 전용 */
@@ -16,6 +21,14 @@ export interface ImportedImage {
   heightPx: number
   previewWidthPx: number
   previewHeightPx: number
+  /** 원본 메타데이터 DPI — 물리 치수 보존 배치(실제 cm 크기 유지)에 사용 */
+  dpi?: number
+}
+
+/** .dtf 프로젝트 열기 결과 — 데이터 + 열린 파일 경로(문서 이름 표시용) */
+export interface OpenedProject {
+  data: ProjectData
+  filePath: string
 }
 
 /** 배경 제거 결과 — 처리된 32-bit RGBA PNG가 새 원본이 된다 (치수는 입력과 동일) */
@@ -73,8 +86,10 @@ export interface DtfApi {
   openGuidePdf(): Promise<void>
   /** 번들된 사용자 메뉴얼 PDF를 시스템 기본 뷰어로 열기 */
   openManualPdf(): Promise<void>
+  /** 번들된 오픈소스 라이선스 고지(THIRD_PARTY_LICENSES.txt)를 기본 뷰어로 열기 */
+  openLicenses(): Promise<void>
   /** 현재 작업을 .dtf 프로젝트로 저장 — 저장 경로 반환, 취소 시 null */
   saveProject(data: ProjectData, path?: string): Promise<string | null>
-  /** .dtf 프로젝트 열기 — 프로젝트 데이터 반환, 취소 시 null */
-  openProject(path?: string): Promise<ProjectData | null>
+  /** .dtf 프로젝트 열기 — 데이터 + 파일 경로 반환, 취소 시 null */
+  openProject(path?: string): Promise<OpenedProject | null>
 }

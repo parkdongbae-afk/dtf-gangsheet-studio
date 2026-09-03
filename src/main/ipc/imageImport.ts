@@ -11,9 +11,10 @@
  * (sharp 도입 여부는 실수요 발생 시 별도 결정).
  */
 import { BrowserWindow, dialog, ipcMain, nativeImage } from 'electron'
-import { statSync } from 'fs'
+import { closeSync, openSync, readSync, statSync } from 'fs'
 import { basename, resolve } from 'path'
 import type { ImportedImage } from '../../types/ipc'
+import { extractImageDpi } from '../../core/imageMeta'
 import { readLastDir, saveLastDir } from './dialogMemory'
 
 /** 프리뷰 최대 변 길이 (px) */
@@ -53,12 +54,28 @@ export function makePreview(absPath: string): ImportedImage {
     )
   }
   const previewSize = preview.getSize()
+  const dpi = extractImageDpi(readHeaderBytes(absPath, DPI_HEADER_BYTES))
   return {
     dataUrl: preview.toDataURL(),
     widthPx: width,
     heightPx: height,
     previewWidthPx: previewSize.width,
-    previewHeightPx: previewSize.height
+    previewHeightPx: previewSize.height,
+    ...(dpi !== null ? { dpi } : {})
+  }
+}
+
+/** DPI 메타데이터(pHYs/JFIF) 탐색에 읽을 헤더 상한 — 두 메타데이터 모두 선두 청크에 있다 */
+const DPI_HEADER_BYTES = 65_536
+
+function readHeaderBytes(absPath: string, maxBytes: number): Uint8Array {
+  const fd = openSync(absPath, 'r')
+  try {
+    const buf = Buffer.alloc(maxBytes)
+    const bytesRead = readSync(fd, buf, 0, maxBytes, 0)
+    return buf.subarray(0, bytesRead)
+  } finally {
+    closeSync(fd)
   }
 }
 

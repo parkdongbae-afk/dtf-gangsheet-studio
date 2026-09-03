@@ -76,6 +76,7 @@ import {
 import { useHtmlImage } from './useHtmlImage'
 import { PropertiesPanel } from '../PropertiesPanel'
 import { mmToPx, pxToMm } from '../../../../core/math'
+import { physicalDocPixels } from '../../../../core/imageMeta'
 import { PROJECT_FORMAT, PROJECT_VERSION, type ProjectData } from '../../../../core/project'
 
 /**
@@ -1369,26 +1370,23 @@ export function ProxyCanvas({
     })()
   }, [images, selectedIds, removeBusy, setImages, commitImages])
 
-  /** 경로들을 기준점 중심에 캐스케이드 배치해 씬에 추가 */
+  /** 경로들을 기준점 중심에 캐스케이드 배치해 씬에 추가 — 원본 DPI 메타데이터가
+   *  있으면 물리 크기(실제 cm)를 보존해 350 DPI 문서 px으로 환산해 배치한다. */
   const importPaths = useCallback(
     async (paths: string[], center: DocPoint): Promise<void> => {
       try {
         const placed: PlacedImage[] = []
         for (let i = 0; i < paths.length; i++) {
           const imported = await window.api.importImage(paths[i])
-          const topLeft = centeredTopLeft(
-            imported.widthPx,
-            imported.heightPx,
-            center,
-            i,
-            view.scale
-          )
+          const docWidthPx = physicalDocPixels(imported.widthPx, imported.dpi)
+          const docHeightPx = physicalDocPixels(imported.heightPx, imported.dpi)
+          const topLeft = centeredTopLeft(docWidthPx, docHeightPx, center, i, view.scale)
           placed.push({
             id: crypto.randomUUID(),
             filePath: paths[i],
             dataUrl: imported.dataUrl,
-            widthPx: imported.widthPx,
-            heightPx: imported.heightPx,
+            widthPx: docWidthPx,
+            heightPx: docHeightPx,
             x: topLeft.x,
             y: topLeft.y,
             rotation: 0
