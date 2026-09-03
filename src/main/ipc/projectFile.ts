@@ -7,6 +7,7 @@
 import { BrowserWindow, dialog, ipcMain } from 'electron'
 import { readFileSync, writeFileSync } from 'node:fs'
 import { PROJECT_EXTENSION, validateProjectData, type ProjectData } from '../../core/project'
+import { readLastDir, saveDefaultPath, saveLastDir } from './dialogMemory'
 
 const filters: Electron.FileFilter[] = [
   { name: 'DTF 갱시트 프로젝트', extensions: [PROJECT_EXTENSION] }
@@ -15,26 +16,33 @@ const filters: Electron.FileFilter[] = [
 const withExtension = (path: string): string =>
   path.toLowerCase().endsWith(`.${PROJECT_EXTENSION}`) ? path : `${path}.${PROJECT_EXTENSION}`
 
+/** 마지막 프로젝트 폴더 기준 저장 경로 선택 — 확정 시 폴더를 기억한다 */
 async function pickSavePath(): Promise<string | null> {
   const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0]
   if (!win) return null
   const result = await dialog.showSaveDialog(win, {
     title: '프로젝트 저장',
-    defaultPath: `갭시트.${PROJECT_EXTENSION}`,
+    defaultPath: saveDefaultPath('project', `갭시트.${PROJECT_EXTENSION}`),
     filters
   })
-  return result.canceled ? null : (result.filePath ?? null)
+  if (result.canceled || !result.filePath) return null
+  saveLastDir('project', result.filePath)
+  return result.filePath
 }
 
+/** 마지막 프로젝트 폴더에서 열기 — 확정 시 폴더를 기억한다 */
 async function pickOpenPath(): Promise<string | null> {
   const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0]
   if (!win) return null
   const result = await dialog.showOpenDialog(win, {
     title: '프로젝트 열기',
+    defaultPath: readLastDir('project'),
     filters,
     properties: ['openFile']
   })
-  return result.canceled ? null : (result.filePaths[0] ?? null)
+  const picked = result.canceled ? null : (result.filePaths[0] ?? null)
+  if (picked) saveLastDir('project', picked)
+  return picked
 }
 
 export function registerProjectIpc(): void {

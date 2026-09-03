@@ -57,6 +57,14 @@ export function normalizeRotation(deg: number): number {
   return wrapped === -180 ? 180 : wrapped
 }
 
+/**
+ * 축 고정(수평·수직) 이동 제약 — 우세한 축만 남긴다 (|dx| ≥ |dy|면 수평, 동점·정지는 수평).
+ * 드래그 중 Shift 홀드 시 수평/수직 복제·이동에 사용.
+ */
+export function constrainAxis(dx: number, dy: number): { dx: number; dy: number } {
+  return Math.abs(dx) >= Math.abs(dy) ? { dx, dy: 0 } : { dx: 0, dy }
+}
+
 /** Konva 노드 onTransformEnd 판독값 — scale은 트랜스포머가 붙인 임시값 */
 export interface NodeTransformReading {
   x: number
@@ -192,5 +200,46 @@ export function reorderItem<T>(items: readonly T[], id: unknown, op: LayerOrderO
   const next = [...items]
   const [moved] = next.splice(index, 1)
   next.splice(target, 0, moved)
+  return next
+}
+
+/**
+ * 다중 선택 레이어 일괄 이동 (델타 기능) — 선택 항목들의 상대 z순서를 유지한 채
+ * 통째로 이동한다. forward/backward는 선택 블록 전체를 비선택 항목과 맞바꿔 한 걸음
+ * 이동 (끝에서 스왑 순회), front/back은 비선택 집합 앞/뒤로 블록을 통째로 옮긴다.
+ * 일치 항목 없음·경계 no-op는 원본과 동일한 새 배열을 반환한다.
+ */
+export function reorderItems<T>(
+  items: readonly T[],
+  ids: readonly unknown[],
+  op: LayerOrderOp
+): T[] {
+  const selected = new Set(
+    ids.filter((id) => items.some((item) => item === id || (item as { id?: unknown }).id === id))
+  )
+  if (selected.size === 0) return [...items]
+  const isSelected = (item: T): boolean =>
+    selected.has(item) || selected.has((item as { id?: unknown }).id)
+
+  if (op === 'front' || op === 'back') {
+    const movers = items.filter(isSelected)
+    const rest = items.filter((item) => !isSelected(item))
+    return op === 'front' ? [...rest, ...movers] : [...movers, ...rest]
+  }
+
+  const next = [...items]
+  if (op === 'forward') {
+    for (let i = next.length - 2; i >= 0; i--) {
+      if (isSelected(next[i]) && !isSelected(next[i + 1])) {
+        ;[next[i], next[i + 1]] = [next[i + 1], next[i]]
+      }
+    }
+  } else {
+    for (let i = 1; i < next.length; i++) {
+      if (isSelected(next[i]) && !isSelected(next[i - 1])) {
+        ;[next[i], next[i - 1]] = [next[i - 1], next[i]]
+      }
+    }
+  }
   return next
 }

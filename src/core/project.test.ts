@@ -96,6 +96,46 @@ describe('validateProjectData — 스키마 위반 거부', () => {
   })
 })
 
+describe('validateProjectData — 그룹(groupId) 저장', () => {
+  it('groupId 문자열 보존 — 같은 값 공유 시 그룹 유지', () => {
+    const raw = validProject()
+    raw.images.push({ ...raw.images[0], id: 'a2', groupId: 'g-1' })
+    raw.images[0].groupId = 'g-1'
+    const result = validateProjectData(raw)
+    expect(result.images[0].groupId).toBe('g-1')
+    expect(result.images[1].groupId).toBe('g-1')
+  })
+
+  it('groupId 생략·빈 문자열 → undefined 정규화 (v1 하위 호환)', () => {
+    const raw = validProject()
+    raw.images[0].groupId = ''
+    const result = validateProjectData(raw)
+    expect(result.images[0].groupId).toBeUndefined()
+    const legacy = validateProjectData(validProject())
+    expect(legacy.images[0].groupId).toBeUndefined()
+  })
+
+  it('groupId 비문자열 타입 거부 아님 — undefined 정규화', () => {
+    const raw = { ...validProject() }
+    const image = { ...raw.images[0], groupId: 123 }
+    const withNumber = { ...raw, images: [image] }
+    expect(validateProjectData(withNumber).images[0].groupId).toBeUndefined()
+  })
+
+  it('locked true 보존·false/비불 값은 undefined 정규화 (v1 하위 호환)', () => {
+    const locked = validProject()
+    locked.images[0].locked = true
+    expect(validateProjectData(locked).images[0].locked).toBe(true)
+
+    const falsy = validProject()
+    falsy.images[0].locked = false
+    expect(validateProjectData(falsy).images[0].locked).toBeUndefined()
+
+    const legacy = validateProjectData(validProject())
+    expect(legacy.images[0].locked).toBeUndefined()
+  })
+})
+
 describe('프로젝트 상수', () => {
   it('확장자 .dtf · 포맷·버전 식별자', () => {
     expect(PROJECT_EXTENSION).toBe('dtf')

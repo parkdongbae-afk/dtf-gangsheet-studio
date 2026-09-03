@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   alignItems,
+  alignToDocument,
   marqueeRect,
   marqueeSelection,
   rectsIntersect,
@@ -163,5 +164,52 @@ describe('alignItems — 균등 분배 (distH·distV)', () => {
   it('정렬 최소 1개·분배 최소 2개 → null', () => {
     expect(alignItems([a], 'left')).toBeNull()
     expect(alignItems([a, b], 'distV')).toBeNull()
+  })
+})
+
+// --- 문서 기준 정렬 (델타 기능 — 단일 선택 문서 중앙 등) ---
+
+describe('alignToDocument — 문서 기준 정렬', () => {
+  const doc = { w: 1000, h: 500 }
+
+  it('단일 항목 가로 중앙 — union 중심을 문서 중앙으로', () => {
+    const moves = alignToDocument([item('a', 400, 0, 200, 100)], 'docCenterH', doc.w, doc.h)!
+    expect(moves).toEqual([{ id: 'a', x: 400, y: 0 }]) // center 500 = 문서 중앙 → 이동 0
+  })
+
+  it('단일 항목 가로 중앙 — 어긋난 경우 평행이동 보정', () => {
+    const moves = alignToDocument([item('a', 100, 0, 200, 100)], 'docCenterH', doc.w, doc.h)!
+    expect(moves[0]!.x).toBe(400)
+    expect(moves[0]!.y).toBe(0)
+  })
+
+  it('다중 항목은 union 기준 — 상대 위치 불변', () => {
+    const moves = alignToDocument(
+      [item('a', 0, 0, 100, 100), item('b', 300, 0, 100, 100)],
+      'docCenterH',
+      doc.w,
+      doc.h
+    )!
+    const byId = (id: string): ItemMove => moves.find((m) => m.id === id)!
+    expect(byId('a').x).toBe(300) // union 0..400 → 좌측을 300으로
+    expect(byId('b').x).toBe(600) // 상대 거리 300 유지
+    expect(moves.every((m) => m.y === 0)).toBe(true)
+  })
+
+  it('우측·하단 가장자리 기준', () => {
+    const right = alignToDocument([item('a', 0, 0, 200, 100)], 'docRight', doc.w, doc.h)!
+    expect(right[0]!.x).toBe(800)
+    const bottom = alignToDocument([item('a', 0, 0, 200, 100)], 'docBottom', doc.w, doc.h)!
+    expect(bottom[0]!.y).toBe(400)
+  })
+
+  it('빈 선택 → null', () => {
+    expect(alignToDocument([], 'docLeft', doc.w, doc.h)).toBeNull()
+  })
+
+  it('회전 항목은 회전 바운딩 박스 기준 (화면 표시 경계)', () => {
+    // 90° 회전: bbox (x-h, y, x, y+w) = (-100, 0, 0, 300) → docLeft는 bbox.left를 0으로
+    const moves = alignToDocument([item('a', 0, 0, 300, 100, 90)], 'docLeft', doc.w, doc.h)!
+    expect(moves[0]!.x).toBe(100)
   })
 })

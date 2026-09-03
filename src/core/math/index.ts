@@ -42,6 +42,16 @@ export function pxToCm(px: number, dpi: number = 350): number {
   return (px / dpi) * 2.54
 }
 
+/** mm → px 환산 (반올림 없음 — 키보드 누적 이동의 드리프트 방지). 방향키 이동 거리용. */
+export function mmToPx(mm: number, dpi: number = 350): number {
+  return (mm / 25.4) * dpi
+}
+
+/** px → mm 환산 (표시 전용). */
+export function pxToMm(px: number, dpi: number = 350): number {
+  return (px / dpi) * 25.4
+}
+
 /** PSD 치수 한계 초과 오류 — 2m 단위 분할 안내 (CLAUDE.md §1-3) */
 export class CanvasSizeLimitError extends Error {
   readonly requestedPx: number

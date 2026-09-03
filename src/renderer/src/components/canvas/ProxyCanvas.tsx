@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type Konva from 'konva'
 import type { Box } from 'konva/lib/shapes/Transformer'
-import { Image, Layer, Rect, Shape, Stage, Transformer } from 'react-konva'
+import { Image, Layer, Line, Rect, Shape, Stage, Text, Transformer } from 'react-konva'
 import {
   Boxes,
   Expand,
@@ -12,11 +12,14 @@ import {
   ImagePlus,
   LayoutGrid,
   Maximize,
+  Minus,
+  Plus,
   Redo2,
   Save,
   Shrink,
   Undo2
 } from 'lucide-react'
+import { ContextMenu } from './ContextMenu'
 import { ExportDialog } from './ExportDialog'
 import { GridDialog } from './GridDialog'
 import { GridSettingsDialog } from './GridSettingsDialog'
@@ -24,7 +27,28 @@ import { NestingDialog } from './NestingDialog'
 import { RulerOverlay } from './RulerOverlay'
 import { BgSitesDialog } from '../BgSitesDialog'
 import { packImages } from './autoNesting'
-import { alignItems, marqueeSelection, type AlignOp } from './alignment'
+import {
+  alignItems,
+  alignToDocument,
+  marqueeSelection,
+  rotatedBBox,
+  type AlignOp,
+  type DocAlignOp
+} from './alignment'
+import {
+  computeSnap,
+  unionOfItems,
+  type SnapGapLabel,
+  type SnapGuide,
+  type SnapTarget
+} from './snap'
+import {
+  cloneWithNewGroups,
+  expandSelectionToGroups,
+  groupSelection,
+  isSingleCompleteGroup,
+  ungroupSelection
+} from './grouping'
 import {
   DEFAULT_GRID_SETTINGS,
   gridDash,
@@ -35,10 +59,11 @@ import {
   calculateGridPositions,
   centeredTopLeft,
   commitTransform,
+  constrainAxis,
   duplicateOffset,
   fitToCanvas,
   normalizeRotation,
-  reorderItem,
+  reorderItems,
   screenToDoc,
   viewCenterDoc,
   type DocPoint,
@@ -49,6 +74,7 @@ import {
 } from './placement'
 import { useHtmlImage } from './useHtmlImage'
 import { PropertiesPanel } from '../PropertiesPanel'
+import { mmToPx, pxToMm } from '../../../../core/math'
 import { PROJECT_FORMAT, PROJECT_VERSION, type ProjectData } from '../../../../core/project'
 
 /**
@@ -74,6 +100,10 @@ export interface PlacedImage {
   y: number
   /** 노드 중심 회전각 (도, -180 < r ≤ 180) — Konva rotation과 동일 단위 */
   rotation: number
+  /** 선택적 그룹 식별자 — 같은 groupId를 공유하는 항목이 하나의 그룹으로 선택·이동된다 */
+  groupId?: string
+  /** 잠금 — 드래그·트랜스폼·삭제·정렬 등 편집 보호. 선택은 가능(잠금 해제용). */
+  locked?: boolean
 }
 
 /** 줌 클램프 (화면 배율 기준) */
@@ -86,15 +116,54 @@ const FIT_PADDING = 24
 /** 문서 배경 Rect 식별명 — 빈 곳 클릭(선택 해제) 판정에 사용 */
 const DOC_BACKGROUND = 'doc-background'
 const SELECTION_STROKE = '#6366f1'
+/** 잠금 항목 선택 테두리 — 확정 블록 보호 표시 */
+const LOCKED_STROKE = '#f59e0b'
+/** 드래그 스냅 가이드 라인·간격 라벨 */
+const SNAP_GUIDE_STROKE = '#22d3ee'
+/** 스냅 임계값 (화면 px — 문서 px은 줌 배율로 환산) */
+const SNAP_THRESHOLD_SCREEN_PX = 6
+/** Shift 회전 스냅 — 15° 배수, 허용 오차 내 접근 시 스냅 */
+const ROTATION_SNAP_STEP_DEG = 15
+const ROTATION_SNAPS = Array.from(
+  { length: 360 / ROTATION_SNAP_STEP_DEG },
+  (_, i) => i * ROTATION_SNAP_STEP_DEG
+)
 /** 리사이즈 최소 치수 (절대 px) — 반전·음수 치수 방지 (표준 Konva 레시피) */
 const MIN_TRANSFORM_PX = 5
 /** undo 히스토리 상한 (단계) — 초과분은 가장 오래된 스냅샷부터 폐기 */
 const UNDO_LIMIT = 100
 /** 마키 시작을 클릭으로 판정하는 화면 px 임계 — 미만 이동은 선택 해제로만 처리 */
 const MARQUEE_CLICK_PX = 3
+/** 방향키 이동 기본 거리 (mm) — 1mm 단위로 1~50mm 조절 */
+const NUDGE_DEFAULT_MM = 5
+const NUDGE_MIN_MM = 1
+const NUDGE_MAX_MM = 50
+/** Shift+방향키 미세 이동 거리 (mm) */
+const NUDGE_FINE_MM = 1
+/** 연속 방향키 누름을 하나의 undo 단계로 묶는 공백 허용 시간 (ms) */
+const NUDGE_COALESCE_MS = 900
 
 const boundMinSize = (oldBox: Box, newBox: Box): Box =>
   newBox.width < MIN_TRANSFORM_PX || newBox.height < MIN_TRANSFORM_PX ? oldBox : newBox
+
+/** 스냅 계산용 배치 조각 — PlacedImage에서 기하만 남긴다 (드래그 세션에 적재) */
+const toSnapItem = (
+  img: PlacedImage
+): {
+  id: string
+  x: number
+  y: number
+  widthPx: number
+  heightPx: number
+  rotation: number
+} => ({
+  id: img.id,
+  x: img.x,
+  y: img.y,
+  widthPx: img.widthPx,
+  heightPx: img.heightPx,
+  rotation: img.rotation
+})
 
 const clamp = (value: number, min: number, max: number): number =>
   Math.min(Math.max(value, min), max)
@@ -169,6 +238,10 @@ export function ProxyCanvas({
   const [bgSitesOpen, setBgSitesOpen] = useState(false)
   const [exportOpen, setExportOpen] = useState(false)
   const [nestingOpen, setNestingOpen] = useState(false)
+  /** 방향키 이동 거리 (mm) — 1mm 단위 조절, 기본 5mm */
+  const [nudgeStepMm, setNudgeStepMm] = useState(NUDGE_DEFAULT_MM)
+  /** 우클릭 컨텍스트 메뉴 위치 (뷰포트 로컬 화면 px) — null이면 닫힘 */
+  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null)
   /** 그리드 표시 설정 — 보기 옵션이라 히스토리(undo) 대상 아님 */
   const [gridSettings, setGridSettings] = useState<GridSettings>(DEFAULT_GRID_SETTINGS)
   /** 문서 배경 체커보드 표시 — 흰색 배경 이미지의 경계 식별용 보기 옵션(표시 전용) */
@@ -177,6 +250,16 @@ export function ProxyCanvas({
   const [panning, setPanning] = useState(false)
   /** 배경 제거 진행 중 — 사이드카 추론(첫 요청은 모델 다운로드 포함) 동안 버튼 잠금 */
   const [removeBusy, setRemoveBusy] = useState(false)
+  /** 드래그 스냅 오버레이 — 가이드 라인·간격 라벨 (드래그 중에만 존재) */
+  const [snapOverlay, setSnapOverlay] = useState<{
+    guides: SnapGuide[]
+    labels: SnapGapLabel[]
+  } | null>(null)
+  /** Shift 홀드 — 회전 핸들 15° 스냅 활성화 (드래그 축 고정과 독립) */
+  const [shiftDown, setShiftDown] = useState(false)
+  /** 앱 내부 클립보드 — Ctrl+C/X로 적재, Ctrl+V로 캐스케이드 오프셋 반복 붙여넣기 */
+  const clipboardRef = useRef<PlacedImage[]>([])
+  const pasteCountRef = useRef(0)
 
   /** 체커보드 패턴 타일(16px) — 흰색 배경 이미지의 경계 식별용 */
   const checkerPattern = useMemo(() => {
@@ -203,13 +286,74 @@ export function ProxyCanvas({
   const { past, future } = history
 
   /**
+   * 연속 커밋 병합 추적 — 방향키 홀드 폭주가 undo 100단계를 덮어쓰지 않게 한다.
+   * 같은 coalesceKey를 900ms 안에 다시 쓰면 past 푸시를 생략한다(첫 커밋 스냅샷 유지).
+   */
+  const lastCoalesceRef = useRef<{ key: string; at: number } | null>(null)
+
+  /**
+   * 노드 드래그 세션 — mousedown 시점 modifier로 모드가 결정된다.
+   * move: 선택 항목 전체 이동(그룹 포함). duplicate: Ctrl+드래그 — 사본을 먼저
+   * 씬에 추가(히스토리 없이)하고 원본 노드는 제자리에 고정한 채 사본만 움직인다.
+   */
+  interface DragSession {
+    mode: 'move' | 'duplicate'
+    draggedId: string
+    /** 이동 대상 시작 위치 — move=선택 항목들, duplicate=드래그 원본+사본들 */
+    base: Map<string, { x: number; y: number }>
+    /** undo 기준 스냅샷 — duplicate에서는 복제 이전 씬 */
+    preScene: PlacedImage[]
+    /** duplicate 시작 시점 선택 복원용 */
+    selectionBefore: string[]
+    /** dragmove가 확정한 최종 델타 — duplicate는 원본 노드를 제자리로 되돌리므로
+     *  dragend의 node 위치를 믿을 수 없어 세션에 추적한다 */
+    lastDelta: { dx: number; dy: number }
+    /** 드래그 스냅 문맥 — 이동군 시작 배치·정적 스냅 대상·문서 좌표 임계값 */
+    snap: {
+      movingItems: Array<{
+        id: string
+        x: number
+        y: number
+        widthPx: number
+        heightPx: number
+        rotation: number
+      }>
+      targets: SnapTarget[]
+      threshold: number
+    } | null
+  }
+  const dragRef = useRef<DragSession | null>(null)
+  /** Ctrl+클릭 토글 해제 지연 — 드래그로 복제가 되면 취소, mouseup(무이동) 시 확정 */
+  const pendingToggleOffRef = useRef<string | null>(null)
+  /** mousedown modifier 스냅샷 — dragstart 시점엔 네이티브 evt가 없어 미리 캡처 */
+  const gestureRef = useRef<{ id: string; ctrl: boolean } | null>(null)
+
+  /**
    * 히스토리 기록 씬 변경 커밋 — 모든 이미지 변경 경로의 단일 관문. 변경 전 스냅샷을
    * past에 push(상한 100)하고 future를 폐기해 새 변경 이후의 redo를 무효화한다.
    * 업데이터는 순수 함수만 받는다(StrictMode 이중 호출 안전 — randomUUID는 밖에서).
+   * base는 past에 남길 기준 씬(기본=현재 씬) — Ctrl+드래그 복제처럼 히스토리 없이
+   * 씬이 먼저 바뀐 경로는 복제 이전 스냅샷을 명시한다.
    */
   const commitImages = useCallback(
-    (updater: (prev: PlacedImage[]) => PlacedImage[]): void => {
-      setHistory((h) => ({ past: [...h.past, images].slice(-UNDO_LIMIT), future: [] }))
+    (
+      updater: (prev: PlacedImage[]) => PlacedImage[],
+      base?: PlacedImage[],
+      coalesceKey?: string
+    ): void => {
+      const now = Date.now()
+      const last = lastCoalesceRef.current
+      const coalesce =
+        coalesceKey !== undefined &&
+        last !== null &&
+        last.key === coalesceKey &&
+        now - last.at < NUDGE_COALESCE_MS
+      lastCoalesceRef.current = coalesceKey !== undefined ? { key: coalesceKey, at: now } : null
+      setHistory((h) =>
+        coalesce
+          ? { past: h.past, future: [] }
+          : { past: [...h.past, base ?? images].slice(-UNDO_LIMIT), future: [] }
+      )
       setImages(updater)
     },
     [images]
@@ -319,15 +463,19 @@ export function ProxyCanvas({
         format: PROJECT_FORMAT,
         version: PROJECT_VERSION,
         document: { widthPx, heightPx },
-        images: images.map(({ id, filePath, widthPx: w, heightPx: h, x, y, rotation }) => ({
-          id,
-          filePath,
-          widthPx: w,
-          heightPx: h,
-          x,
-          y,
-          rotation
-        }))
+        images: images.map(
+          ({ id, filePath, widthPx: w, heightPx: h, x, y, rotation, groupId, locked }) => ({
+            id,
+            filePath,
+            widthPx: w,
+            heightPx: h,
+            x,
+            y,
+            rotation,
+            groupId,
+            ...(locked ? { locked: true } : {})
+          })
+        )
       }
       try {
         await window.api.saveProject(data, pathOverride)
@@ -348,15 +496,131 @@ export function ProxyCanvas({
     return () => window.removeEventListener('dtf:save-project', onSaveProject)
   }, [handleSave])
 
+  /** 잠금 해제 사본 생성 규칙 — 복제·붙여넣기 결과물은 편집 가능한 상태로 시작한다 */
+  const stripLock = (img: PlacedImage): PlacedImage => ({ ...img, locked: undefined })
+
+  /** 스냅 정적 대상 — 이동군 제외 나머지 씬 + 문서 박스(가장자리·중앙선). 잠금 항목도 포함 */
+  const buildSnapTargets = useCallback(
+    (excludeIds: ReadonlySet<string>): SnapTarget[] => [
+      ...images
+        .filter((img) => !excludeIds.has(img.id))
+        .map((img) => ({ box: rotatedBBox(img), kind: 'item' as const })),
+      { box: { left: 0, top: 0, right: widthPx, bottom: heightPx }, kind: 'doc' as const }
+    ],
+    [images, widthPx, heightPx]
+  )
+
+  /** 선택 항목 전체 삭제 — 컨텍스트 메뉴·Del 공용. 잠긴 항목은 남기고 나머지만 삭제 */
+  const handleDeleteSelection = useCallback((): void => {
+    if (selectedIds.length === 0) return
+    const lockedIds = new Set(
+      images.filter((img) => selectedIds.includes(img.id) && img.locked).map((img) => img.id)
+    )
+    const deleting = selectedIds.filter((id) => !lockedIds.has(id))
+    if (deleting.length === 0) return
+    commitImages((prev) => prev.filter((img) => !deleting.includes(img.id)))
+    setSelectedIds((sel) => (lockedIds.size > 0 ? sel.filter((id) => !deleting.includes(id)) : []))
+  }, [selectedIds, images, commitImages])
+
+  /** 블록 복제 — 선택 전체를 화면 24px 오프셋으로 복사(그룹은 새 그룹 id로 재매핑), 사본 선택 */
+  const handleDuplicate = useCallback((): void => {
+    const selected = images.filter((img) => selectedIds.includes(img.id))
+    if (selected.length === 0) return
+    const offset = duplicateOffset(view.scale)
+    const copies = cloneWithNewGroups(selected, { dx: offset, dy: offset }, () =>
+      crypto.randomUUID()
+    ).map(stripLock)
+    commitImages((prev) => [...prev, ...copies])
+    setSelectedIds(copies.map((copy) => copy.id))
+  }, [images, selectedIds, view.scale, commitImages])
+
+  /** 내부 클립보드 복사 — 선택 전체(그룹 관계 포함)를 통째로 적재, 붙여넣기 카운트 초기화 */
+  const handleCopy = useCallback((): void => {
+    const selected = images.filter((img) => selectedIds.includes(img.id))
+    if (selected.length === 0) return
+    clipboardRef.current = selected
+    pasteCountRef.current = 0
+  }, [images, selectedIds])
+
+  /** 잘라내기 — 복사 후 삭제(잠금 항목은 남음) */
+  const handleCut = useCallback((): void => {
+    handleCopy()
+    handleDeleteSelection()
+  }, [handleCopy, handleDeleteSelection])
+
+  /** 붙여넣기 — 클립보드를 화면 24px 캐스케이드 오프셋(횟수 배수)으로 복제·선택 */
+  const handlePaste = useCallback((): void => {
+    const source = clipboardRef.current
+    if (source.length === 0) return
+    pasteCountRef.current += 1
+    const offset = duplicateOffset(view.scale) * pasteCountRef.current
+    const copies = cloneWithNewGroups(source, { dx: offset, dy: offset }, () =>
+      crypto.randomUUID()
+    ).map(stripLock)
+    commitImages((prev) => [...prev, ...copies])
+    setSelectedIds(copies.map((copy) => copy.id))
+  }, [view.scale, commitImages])
+
+  /** 잠금 토글 — 하나라도 잠금 해제 항목이 있으면 전체 잠금, 전부 잠겨 있으면 해제 */
+  const handleToggleLock = useCallback((): void => {
+    const selected = images.filter((img) => selectedIds.includes(img.id))
+    if (selected.length === 0) return
+    const lockTo = !selected.every((img) => img.locked === true)
+    commitImages((prev) =>
+      prev.map((img) => (selectedIds.includes(img.id) ? { ...img, locked: lockTo } : img))
+    )
+  }, [images, selectedIds, commitImages])
+
+  /** 선택 항목(2개 이상)을 하나의 그룹으로 — 이미 동일 단일 그룹이면 no-op. 잠긴 항목은 그룹화 불가 */
+  const handleGroup = useCallback((): void => {
+    if (selectedIds.length < 2) return
+    if (isSingleCompleteGroup(images, selectedIds)) return
+    if (images.some((img) => selectedIds.includes(img.id) && img.locked)) return
+    const groupId = crypto.randomUUID()
+    commitImages((prev) => groupSelection(prev, selectedIds, groupId))
+  }, [images, selectedIds, commitImages])
+
+  /** 선택이 닿는 그룹 전체 해제 (미선택 멤버 포함) — 선택은 유지. 잠긴 항목 포함 시 불가 */
+  const handleUngroup = useCallback((): void => {
+    if (images.some((img) => selectedIds.includes(img.id) && img.locked)) return
+    commitImages((prev) => ungroupSelection(prev, selectedIds))
+  }, [images, selectedIds, commitImages])
+
+  /** 방향키 누적 이동 — 연속 누름은 900ms 창에서 한 undo 단계로 병합. 잠긴 항목은 제외 */
+  const handleNudge = useCallback(
+    (dirX: number, dirY: number, fine: boolean): void => {
+      const stepPx = mmToPx(fine ? NUDGE_FINE_MM : nudgeStepMm)
+      if (stepPx <= 0) return
+      const movable = new Set(
+        images.filter((img) => selectedIds.includes(img.id) && !img.locked).map((img) => img.id)
+      )
+      if (movable.size === 0) return
+      commitImages(
+        (prev) =>
+          prev.map((img) =>
+            movable.has(img.id)
+              ? { ...img, x: img.x + dirX * stepPx, y: img.y + dirY * stepPx }
+              : img
+          ),
+        undefined,
+        'nudge'
+      )
+    },
+    [selectedIds, images, nudgeStepMm, commitImages]
+  )
+
   /**
    * 씬 편집 단축키 (통합) — Ctrl+Z=실행취소, Ctrl+Shift+Z/Ctrl+Y=다시실행(선택 불필요),
-   * Del/Backspace=삭제, R=90° 회전, Ctrl/Cmd+D=복제(화면 24px 오프셋 — 캐스케이드 규칙).
-   * 대화상자 모달 중·텍스트 입력 포커스 중에는 전면 무시한다.
+   * Del/Backspace=삭제, R=90° 회전, Ctrl/Cmd+D=복제(화면 24px 오프셋 — 캐스케이드 규칙),
+   * Ctrl+C/X/V=내부 클립보드 복사·잘라내기·붙여넣기, Ctrl+L=잠금 토글,
+   * Ctrl+G/Ctrl+Shift+G=그룹·그룹 해제, 방향키=이동(Shift=1mm 미세).
+   * 대화상자 모달 중·텍스트 입력 포커스 중·드래그 진행 중에는 전면 무시한다.
    */
   useEffect(() => {
     if (gridOpen || gridSettingsOpen || bgSitesOpen || exportOpen || nestingOpen) return
     const onKeyDown = (e: KeyboardEvent): void => {
       if (isEditableTarget(e.target)) return
+      if (dragRef.current !== null) return
       const mod = e.ctrlKey || e.metaKey
       if (mod && (e.key === 's' || e.key === 'S')) {
         e.preventDefault() // 브라우저/Electron 기본 페이지 저장 차단
@@ -371,18 +635,38 @@ export function ProxyCanvas({
         else undo()
         return
       }
+      if (mod && 'cvxCVX'.includes(e.key)) {
+        e.preventDefault() // 내부 클립보드가 시스템 클립보드 동작을 대체
+        if (e.repeat) return
+        const key = e.key.toLowerCase()
+        if (key === 'c') handleCopy()
+        else if (key === 'v') handlePaste()
+        else handleCut()
+        return
+      }
+      if (mod && (e.key === 'l' || e.key === 'L')) {
+        e.preventDefault()
+        if (!e.repeat) handleToggleLock()
+        return
+      }
+      if (mod && (e.key === 'g' || e.key === 'G')) {
+        e.preventDefault()
+        if (e.repeat) return
+        if (e.shiftKey) handleUngroup()
+        else handleGroup()
+        return
+      }
       if (selectedIds.length === 0) return
       if (e.key === 'Delete' || e.key === 'Backspace') {
         e.preventDefault()
-        commitImages((prev) => prev.filter((img) => !selectedIds.includes(img.id)))
-        setSelectedIds([])
+        handleDeleteSelection()
         return
       }
       if ((e.key === 'r' || e.key === 'R') && !e.repeat) {
         e.preventDefault()
         commitImages((prev) =>
           prev.map((img) =>
-            selectedIds.includes(img.id)
+            selectedIds.includes(img.id) && !img.locked
               ? { ...img, rotation: normalizeRotation(img.rotation + 90) }
               : img
           )
@@ -392,26 +676,25 @@ export function ProxyCanvas({
       if (mod && (e.key === 'd' || e.key === 'D')) {
         e.preventDefault() // 브라우저 기본 동작(북마크) 차단 — Electron에서도 명시 차단
         if (e.repeat) return
-        const selected = images.filter((img) => selectedIds.includes(img.id))
-        if (selected.length === 0) return
-        const offset = duplicateOffset(view.scale)
-        // 블록 복제 — 다중 선택 전체를 동일 오프셋으로 복사하고 사본들을 새로 선택한다
-        const copies = selected.map((source) => ({
-          ...source,
-          id: crypto.randomUUID(),
-          x: source.x + offset,
-          y: source.y + offset
-        }))
-        commitImages((prev) => [...prev, ...copies])
-        setSelectedIds(copies.map((copy) => copy.id))
+        handleDuplicate()
+        return
+      }
+      const nudgeDirs: Record<string, [number, number]> = {
+        ArrowLeft: [-1, 0],
+        ArrowRight: [1, 0],
+        ArrowUp: [0, -1],
+        ArrowDown: [0, 1]
+      }
+      const dir = nudgeDirs[e.key]
+      if (dir) {
+        e.preventDefault() // 스크롤·가상커서 이동 등 기본 동작 차단
+        handleNudge(dir[0], dir[1], e.shiftKey)
       }
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [
     selectedIds,
-    images,
-    view.scale,
     gridOpen,
     gridSettingsOpen,
     bgSitesOpen,
@@ -420,7 +703,16 @@ export function ProxyCanvas({
     commitImages,
     undo,
     redo,
-    handleSave
+    handleSave,
+    handleDuplicate,
+    handleCopy,
+    handleCut,
+    handlePaste,
+    handleToggleLock,
+    handleGroup,
+    handleUngroup,
+    handleNudge,
+    handleDeleteSelection
   ])
 
   /**
@@ -433,11 +725,32 @@ export function ProxyCanvas({
     const stage = stageRef.current
     if (!transformer || !stage) return
     const nodes = selectedIds
+      // 잠긴 항목은 선택 테두리(노드 스트로크)만 — 리사이즈·회전 핸들을 붙이지 않는다
+      .filter((id) => images.find((img) => img.id === id)?.locked !== true)
       .map((id) => stage.findOne(`#${id}`))
       .filter((node): node is Konva.Node => node !== undefined)
     transformer.nodes(nodes)
     transformer.getLayer()?.batchDraw()
   }, [selectedIds, images])
+
+  /** Shift 홀드 추적 — 회전 핸들 15° 스냅 활성화 (텍스트 입력 중에도 상태만 유지) */
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent): void => {
+      if (e.key === 'Shift') setShiftDown(true)
+    }
+    const onKeyUp = (e: KeyboardEvent): void => {
+      if (e.key === 'Shift') setShiftDown(false)
+    }
+    const onBlur = (): void => setShiftDown(false)
+    window.addEventListener('keydown', onKeyDown)
+    window.addEventListener('keyup', onKeyUp)
+    window.addEventListener('blur', onBlur)
+    return () => {
+      window.removeEventListener('keydown', onKeyDown)
+      window.removeEventListener('keyup', onKeyUp)
+      window.removeEventListener('blur', onBlur)
+    }
+  }, [])
 
   /** 휠 줌 — 포인터 아래 문서 좌표를 고정한 채 stage.scale/position만 갱신 */
   const handleWheel = (e: Konva.KonvaEventObject<WheelEvent>): void => {
@@ -521,7 +834,13 @@ export function ProxyCanvas({
     const doc = screenToDoc(view, pointer.x, pointer.y)
     setMarquee((prev) => (prev ? { ...prev, current: doc } : prev))
     const hits = marqueeSelection(images, marquee.start, doc)
-    setSelectedIds(marquee.additive ? Array.from(new Set([...marquee.baseIds, ...hits])) : hits)
+    // 그룹원을 건드리면 그룹 전체가 선택된다 (클릭 선택과 동일 규칙)
+    setSelectedIds(
+      expandSelectionToGroups(
+        images,
+        marquee.additive ? Array.from(new Set([...marquee.baseIds, ...hits])) : hits
+      )
+    )
   }
 
   /** 휠 클릭 팬 종료 — 릴리즈는 스테이지 밖에서도 놓치지 않도록 window에서 포착 */
@@ -555,80 +874,249 @@ export function ProxyCanvas({
   }, [marquee, view.scale])
 
   /**
+   * 우클릭 컨텍스트 메뉴 — 이미지 위: 미선택이면 선택(그룹 확장) 후 열기.
+   * 트랜스포머 보더 등 선택 관련 영역: 선택 유지 채 열기. 빈 곳: 선택 해제·닫기.
+   */
+  const handleStageContextMenu = (e: Konva.KonvaEventObject<MouseEvent>): void => {
+    e.evt.preventDefault()
+    const hitId = e.target.id()
+    const isImage = images.some((img) => img.id === hitId)
+    const onEmpty = e.target === e.target.getStage() || e.target.name() === DOC_BACKGROUND
+    if (isImage) {
+      if (!selectedIds.includes(hitId)) handleSelect(hitId, false)
+    } else if (onEmpty) {
+      setSelectedIds([])
+      setMenu(null)
+      return
+    }
+    const rect = viewportRef.current?.getBoundingClientRect()
+    setMenu({
+      x: e.evt.clientX - (rect?.left ?? 0),
+      y: e.evt.clientY - (rect?.top ?? 0)
+    })
+  }
+
+  const menuRef = useRef<HTMLDivElement>(null)
+
+  /** 메뉴 열림 중 바깥 mousedown·휠·창 블러·Esc 닫힘 — 메뉴 내부 클릭은 유지 */
+  useEffect(() => {
+    if (!menu) return
+    const close = (): void => setMenu(null)
+    const onMouseDown = (e: MouseEvent): void => {
+      if (menuRef.current?.contains(e.target as Node) !== true) close()
+    }
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape') close()
+    }
+    window.addEventListener('mousedown', onMouseDown, true)
+    window.addEventListener('wheel', close, { passive: true })
+    window.addEventListener('blur', close)
+    window.addEventListener('keydown', onKey)
+    return () => {
+      window.removeEventListener('mousedown', onMouseDown, true)
+      window.removeEventListener('wheel', close)
+      window.removeEventListener('blur', close)
+      window.removeEventListener('keydown', onKey)
+    }
+  }, [menu])
+
+  /**
    * 이미지 클릭 선택 (TECH §4.2) — Ctrl/Cmd=토글(기존 선택 유지·개별 해제 TC-2/3),
    * 일반 클릭=단일 선택. 다중 선택 구성원 재클릭은 선택을 유지한다(그룹 이동 대비).
+   * 그룹원을 건드리면 그룹 전체로 확장한다. Ctrl+클릭의 해제 토글은 mouseup까지
+   * 지연한다 — 드래그로 이어지면 Ctrl+드래그 복제가 되므로.
    * Space 팬 모드 중에는 무시 (내비게이션 우선).
    */
   const handleSelect = useCallback(
     (id: string, additive: boolean): void => {
       if (spaceDown) return
-      setSelectedIds((prev) => {
-        if (additive) {
-          return prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
+      setMenu(null)
+      gestureRef.current = { id, ctrl: additive }
+      pendingToggleOffRef.current = null
+      if (additive) {
+        if (selectedIds.includes(id)) {
+          pendingToggleOffRef.current = id
+          return
         }
-        return prev.includes(id) ? prev : [id]
-      })
+        setSelectedIds(expandSelectionToGroups(images, [...selectedIds, id]))
+        return
+      }
+      if (selectedIds.includes(id)) return
+      setSelectedIds(expandSelectionToGroups(images, [id]))
     },
-    [spaceDown]
+    [spaceDown, images, selectedIds]
   )
 
-  /** 그룹 드래그 기준 스냅샷 — 다중 선택 구성원 드래그 시작 시각의 절대 px 위치들 */
-  const groupDragRef = useRef<Map<string, { x: number; y: number }> | null>(null)
+  /** mouseup(무이동 클릭) — 지연된 Ctrl 토글 해제를 확정. 그룹원이면 그룹 전체 해제. */
+  const handleSelectEnd = useCallback(
+    (id: string): void => {
+      const pending = pendingToggleOffRef.current
+      pendingToggleOffRef.current = null
+      if (pending !== id) return
+      const groupId = images.find((img) => img.id === id)?.groupId
+      setSelectedIds((prev) =>
+        prev.filter(
+          (sid) =>
+            sid !== id &&
+            !(groupId !== undefined && images.find((i) => i.id === sid)?.groupId === groupId)
+        )
+      )
+    },
+    [images]
+  )
 
-  /** 노드 드래그 시작 — 다중 선택이면 그룹 이동 기준점 확보 */
+  /**
+   * 노드 드래그 시작 — mousedown modifier(gestureRef)로 모드 결정.
+   * Ctrl: 선택 항목 전체를 그 자리에 복제(히스토리 없이 씬에 추가, 그룹 id 재매핑)하고
+   * 사본을 선택한 뒤 사본을 끄는 세션. 아니면 선택 항목 이동 세션.
+   */
   const handleNodeDragStart = useCallback(
     (id: string): void => {
-      groupDragRef.current =
-        selectedIds.length > 1 && selectedIds.includes(id)
-          ? new Map(
-              images
-                .filter((img) => selectedIds.includes(img.id))
-                .map((img) => [img.id, { x: img.x, y: img.y }])
-            )
-          : null
+      pendingToggleOffRef.current = null
+      const gesture = gestureRef.current
+      const locked = (sid: string): boolean => images.find((img) => img.id === sid)?.locked === true
+      // 잠긴 항목은 드래그 대상에서 제외 — 미잠금 항목을 끌 때 함께 움직이지 않는다
+      const targets = selectedIds.includes(id)
+        ? selectedIds.filter((sid) => !locked(sid))
+        : locked(id)
+          ? []
+          : [id]
+      const targetImages = images.filter((img) => targets.includes(img.id))
+      const dragged = images.find((img) => img.id === id)
+      if (!dragged || targetImages.length === 0) return
+      if (gesture?.id === id && gesture.ctrl && targetImages.length > 0) {
+        const copies = cloneWithNewGroups(targetImages, { dx: 0, dy: 0 }, () =>
+          crypto.randomUUID()
+        ).map(stripLock)
+        setImages((prev) => [...prev, ...copies])
+        setSelectedIds(copies.map((copy) => copy.id))
+        dragRef.current = {
+          mode: 'duplicate',
+          draggedId: id,
+          base: new Map([
+            [id, { x: dragged.x, y: dragged.y }],
+            ...copies.map((copy) => [copy.id, { x: copy.x, y: copy.y }] as const)
+          ]),
+          preScene: images,
+          selectionBefore: selectedIds,
+          lastDelta: { dx: 0, dy: 0 },
+          snap: {
+            movingItems: copies.map(toSnapItem),
+            // 복제 원본을 스냅 대상에서 제외 — 시작 직후 사본이 원본 위에서
+            // threshold 이내로 끈적이듯 붙는 현상을 방지한다
+            targets: buildSnapTargets(new Set(targetImages.map((img) => img.id))),
+            threshold: SNAP_THRESHOLD_SCREEN_PX / view.scale
+          }
+        }
+        return
+      }
+      dragRef.current = {
+        mode: 'move',
+        draggedId: id,
+        base: new Map(targetImages.map((img) => [img.id, { x: img.x, y: img.y }])),
+        preScene: images,
+        selectionBefore: selectedIds,
+        lastDelta: { dx: 0, dy: 0 },
+        snap: {
+          movingItems: targetImages.map(toSnapItem),
+          targets: buildSnapTargets(new Set(targetImages.map((img) => img.id))),
+          threshold: SNAP_THRESHOLD_SCREEN_PX / view.scale
+        }
+      }
     },
-    [selectedIds, images]
+    [selectedIds, images, view.scale, buildSnapTargets]
   )
 
-  /** 노드 드래그 진행 — 움직인 노드의 델타를 다른 선택 노드에 즉시 반영(단일 커밋 대비) */
-  const handleNodeDragMove = useCallback((id: string, node: Konva.Node): void => {
-    const base = groupDragRef.current
-    const start = base?.get(id)
-    if (!base || !start) return
-    const dx = node.x() - start.x
-    const dy = node.y() - start.y
-    for (const [otherId, pos] of base) {
-      if (otherId === id) continue
-      stageRef.current?.findOne(`#${otherId}`)?.position({ x: pos.x + dx, y: pos.y + dy })
+  /**
+   * 노드 드래그 진행 — 드래그 노드의 델타를 나머지 대상에 즉시 반영.
+   * Shift 홀드(Ctrl+Shift=수평·수직 복제, 일반 드래그=축 고정 이동)는 우세 축만 남긴다.
+   * 스냅: 이동군 union의 에지·중심을 인접 항목·문서 가장자리에 붙이고 가이드를 띄운다.
+   * duplicate 모드에서는 드래그 중인 원본을 제자리로 되돌리고 사본만 움직인다.
+   */
+  const handleNodeDragMove = useCallback((id: string, e: Konva.KonvaEventObject<DragEvent>) => {
+    const session = dragRef.current
+    if (!session || session.draggedId !== id) return
+    const node = e.currentTarget
+    const start = session.base.get(id)
+    if (!start) return
+    let dx = node.x() - start.x
+    let dy = node.y() - start.y
+    if (e.evt.shiftKey) {
+      const constrained = constrainAxis(dx, dy)
+      dx = constrained.dx
+      dy = constrained.dy
+    }
+    if (session.snap) {
+      const moved = session.snap.movingItems.map((it) => ({ ...it, x: it.x + dx, y: it.y + dy }))
+      const snap = computeSnap(unionOfItems(moved), session.snap.targets, session.snap.threshold)
+      dx += snap.dx
+      dy += snap.dy
+      setSnapOverlay(
+        snap.guides.length > 0 || snap.labels.length > 0
+          ? { guides: snap.guides, labels: snap.labels }
+          : null
+      )
+    }
+    session.lastDelta = { dx, dy }
+    if (session.mode === 'move') {
+      node.position({ x: start.x + dx, y: start.y + dy })
+      for (const [otherId, pos] of session.base) {
+        if (otherId === id) continue
+        stageRef.current?.findOne(`#${otherId}`)?.position({ x: pos.x + dx, y: pos.y + dy })
+      }
+    } else {
+      node.position(start)
+      for (const [copyId, pos] of session.base) {
+        if (copyId === id) continue
+        stageRef.current?.findOne(`#${copyId}`)?.position({ x: pos.x + dx, y: pos.y + dy })
+      }
     }
   }, [])
 
   /**
-   * 노드 드래그 종료 — 그룹이면 전체 새 위치를 한 번에 히스토리 커밋(undo 1단계),
-   * 단일이면 해당 항목만 커밋한다.
+   * 노드 드래그 종료 — 한 번의 히스토리 커밋으로 확정.
+   * move: 전체 새 위치 커밋(undo 1단계). duplicate: 원본을 제자리로 되돌리고 사본 위치를
+   * 커밋하되 undo 기준은 복제 이전 씬(preScene) — 되돌리면 복제 자체가 사라진다.
+   * 이동 없는 duplicate(클릭성)는 사본을 되돌리고 원래 선택을 복원한다.
    */
   const handleNodeDragEnd = useCallback(
     (id: string, x: number, y: number): void => {
-      const base = groupDragRef.current
-      groupDragRef.current = null
-      if (!base) {
-        commitImages((prev) => prev.map((img) => (img.id === id ? { ...img, x, y } : img)))
+      const session = dragRef.current
+      dragRef.current = null
+      gestureRef.current = null
+      setSnapOverlay(null)
+      if (!session || session.draggedId !== id) return
+      const { dx, dy } = session.lastDelta
+      if (session.mode === 'duplicate') {
+        stageRef.current?.findOne(`#${id}`)?.position(session.base.get(id) ?? { x: x, y: y })
+        if (dx === 0 && dy === 0) {
+          setImages(session.preScene)
+          setSelectedIds(session.selectionBefore)
+          return
+        }
+        commitImages(
+          (prev) =>
+            prev.map((img) => {
+              const base = session.base.get(img.id)
+              return base && img.id !== id ? { ...img, x: base.x + dx, y: base.y + dy } : img
+            }),
+          session.preScene
+        )
         return
       }
-      const start = base.get(id)
-      if (!start) return
-      const moves = new Map(base)
-      const dx = x - start.x
-      const dy = y - start.y
-      for (const [otherId, pos] of base) {
+      if (dx === 0 && dy === 0) return
+      const moves = new Map(session.base)
+      for (const [otherId, pos] of session.base) {
         if (otherId !== id) moves.set(otherId, { x: pos.x + dx, y: pos.y + dy })
       }
       moves.set(id, { x, y })
-      commitImages((prev) =>
-        prev.map((img) => {
-          const moved = moves.get(img.id)
-          return moved ? { ...img, ...moved } : img
-        })
+      commitImages(
+        (prev) =>
+          prev.map((img) => {
+            const moved = moves.get(img.id)
+            return moved ? { ...img, ...moved } : img
+          }),
+        session.preScene
       )
     },
     [commitImages]
@@ -652,11 +1140,11 @@ export function ProxyCanvas({
   /** 그리드 복제 확정 — 셀 (0,0)=원본 자리를 제외한 순수 JSON 사본 추가 (신규 id만 새로) */
   const handleGridConfirm = useCallback(
     (rows: number, cols: number, gapPx: number): void => {
-      if (!selectedItem) return
+      if (!selectedItem || selectedItem.locked) return
       const copies = calculateGridPositions(selectedItem, rows, cols, gapPx)
         .filter((cell) => cell.row > 0 || cell.col > 0)
         .map((cell) => ({
-          ...selectedItem,
+          ...stripLock(selectedItem),
           id: crypto.randomUUID(),
           x: cell.x,
           y: cell.y
@@ -670,7 +1158,7 @@ export function ProxyCanvas({
   /** 화면 채우기(cover/contain) — fitToCanvas 순수 함수 결과를 히스토리 커밋 (undo 가능) */
   const handleFitMode = useCallback(
     (mode: FitMode): void => {
-      if (!selectedItem) return
+      if (!selectedItem || selectedItem.locked) return
       const commit = fitToCanvas(selectedItem, widthPx, heightPx, mode)
       commitImages((prev) =>
         prev.map((img) => (img.id === selectedItem.id ? { ...img, ...commit } : img))
@@ -695,6 +1183,7 @@ export function ProxyCanvas({
       const placementById = new Map(result.packedItems.map((p) => [p.id, p]))
       commitImages((prev) =>
         prev.map((img) => {
+          if (img.locked) return img // 잠긴 블록은 자동 배치가 침범하지 않는다
           const p = placementById.get(img.id)
           return p ? { ...img, x: p.x, y: p.y, rotation: p.rotation } : img
         })
@@ -706,7 +1195,7 @@ export function ProxyCanvas({
   /** 속성 패널 — 선택 항목 수치 편집 커밋 (cm→px 변환은 패널 담당, 여기선 절대 px만) */
   const handleUpdateSelected = useCallback(
     (patch: Partial<PlacedImage>): void => {
-      if (!selectedItem) return
+      if (!selectedItem || selectedItem.locked) return
       commitImages((prev) =>
         prev.map((img) => (img.id === selectedItem.id ? { ...img, ...patch } : img))
       )
@@ -716,7 +1205,7 @@ export function ProxyCanvas({
 
   /** 속성 패널 90° 회전 버튼 — R 단축키와 동일 규칙 */
   const handleRotate90 = useCallback((): void => {
-    if (!selectedItem) return
+    if (!selectedItem || selectedItem.locked) return
     commitImages((prev) =>
       prev.map((img) =>
         img.id === selectedItem.id
@@ -726,26 +1215,30 @@ export function ProxyCanvas({
     )
   }, [selectedItem, commitImages])
 
-  /** 속성 패널 레이어 순서 — 배열 순서 = z순서 (뒤 index가 화면 위).
-   *  경계 no-op(이미 맨 앞/맨 뒤)는 커밋하지 않아 빈 undo 단계를 만들지 않는다. */
+  /** 레이어 순서 — 배열 순서 = z순서 (뒤 index가 화면 위). 다중 선택은 상대 순서 유지
+   *  일괄 이동(reorderItems), 잠긴 항목은 제외. 경계 no-op는 커밋하지 않아 빈 undo
+   *  단계를 만들지 않는다. */
   const handleOrder = useCallback(
     (op: LayerOrderOp): void => {
-      if (!selectedItem) return
-      const next = reorderItem(images, selectedItem.id, op)
+      const ids = images
+        .filter((img) => selectedIds.includes(img.id) && !img.locked)
+        .map((img) => img.id)
+      if (ids.length === 0) return
+      const next = reorderItems(images, ids, op)
       if (next.every((img, i) => img === images[i])) return
       commitImages(() => next)
     },
-    [images, selectedItem, commitImages]
+    [images, selectedIds, commitImages]
   )
 
   /**
    * 다중 선택 정렬·균등 분배 (TECH §4.3) — 순수 함수 결과를 한 번의 히스토리 커밋으로
-   * 적용해 undo 1단계를 보장한다. 조건 미달(정렬 2·분배 3 미만)은 no-op.
+   * 적용해 undo 1단계를 보장한다. 조건 미달(정렬 2·분배 3 미만)·잠긴 항목 제외 후 없음은 no-op.
    */
   const handleAlign = useCallback(
     (op: AlignOp): void => {
       const moves = alignItems(
-        images.filter((img) => selectedIds.includes(img.id)),
+        images.filter((img) => selectedIds.includes(img.id) && !img.locked),
         op
       )
       if (!moves) return
@@ -761,6 +1254,30 @@ export function ProxyCanvas({
   )
 
   /**
+   * 문서 기준 정렬 — 선택(1개 이상) union을 문서 가장자리·중앙에 맞춘다 (델타 기능).
+   * 상대 정렬과 동일하게 순수 함수 → 히스토리 1커밋. 잠긴 항목은 제외.
+   */
+  const handleDocAlign = useCallback(
+    (op: DocAlignOp): void => {
+      const moves = alignToDocument(
+        images.filter((img) => selectedIds.includes(img.id) && !img.locked),
+        op,
+        widthPx,
+        heightPx
+      )
+      if (!moves) return
+      const movesById = new Map(moves.map((move) => [move.id, move]))
+      commitImages((prev) =>
+        prev.map((img) => {
+          const move = movesById.get(img.id)
+          return move ? { ...img, x: move.x, y: move.y } : img
+        })
+      )
+    },
+    [images, selectedIds, widthPx, heightPx, commitImages]
+  )
+
+  /**
    * 배경 제거(v2) — 선택 항목 전체(단일·다중)를 순차 처리해 RGBA PNG로 에셋 치환.
    * 시작 시점의 id·경로를 캡처해 처리 중 선택이 바뀌어도 올바른 항목을 갱신하고,
    * 성공분은 한 번의 히스토리 커밋으로 반영해 배치 전체가 undo 1단계로 되돌려진다.
@@ -768,7 +1285,7 @@ export function ProxyCanvas({
    */
   const handleRemoveBg = useCallback((): void => {
     const targets = images
-      .filter((img) => selectedIds.includes(img.id))
+      .filter((img) => selectedIds.includes(img.id) && !img.locked)
       .map((img) => ({ id: img.id, filePath: img.filePath }))
     if (targets.length === 0 || removeBusy) return
     setRemoveBusy(true)
@@ -876,6 +1393,10 @@ export function ProxyCanvas({
   )
 
   const zoomPercent = Math.round(view.scale * 100)
+  const selectedImages = images.filter((img) => selectedIds.includes(img.id))
+  const anySelectedUnlocked = selectedImages.some((img) => img.locked !== true)
+  const canGroupMenu = selectedImages.length >= 2 && !isSingleCompleteGroup(images, selectedIds)
+  const canUngroupMenu = selectedImages.some((img) => img.groupId !== undefined)
   const selectedIndex =
     selectedIds.length === 1 ? images.findIndex((img) => img.id === selectedIds[0]) : -1
   const isSingleSelection = selectedIds.length === 1
@@ -914,6 +1435,7 @@ export function ProxyCanvas({
           onDragEnd={handleDragEnd}
           onMouseDown={handleStageMouseDown}
           onMouseMove={handleStageMouseMove}
+          onContextMenu={handleStageContextMenu}
         >
           <Layer>
             {/* 가상 문서 — 실규격 350 DPI 좌표계의 흰색 Rect (테두리는 화면 2px 유지) */}
@@ -981,6 +1503,7 @@ export function ProxyCanvas({
                 selected={selectedIds.includes(placed.id)}
                 selectionStrokeWidth={selectionStrokeWidth}
                 onSelect={handleSelect}
+                onSelectEnd={handleSelectEnd}
                 onDragStart={handleNodeDragStart}
                 onDragMove={handleNodeDragMove}
                 onDragEnd={handleNodeDragEnd}
@@ -988,14 +1511,17 @@ export function ProxyCanvas({
               />
             ))}
             {/* 씬 전체 유일 트랜스포머 — 1개 선택: 모서리 4핸들(비율 유지 기본, Shift=자유
-              비율) + 회전 앵커 · 2개 이상: 합집합 보더만(이동은 노드 드래그 동기화).
-              트랜스포머는 절대(화면) 좌표계로 렌더 — 앵커·스트로크는 줌 배율과 무관하게 화면 px */}
+                비율) + 회전 앵커(Shift 홀드=15° 배수 스냅) · 2개 이상: 합집합 보더만
+                (이동은 노드 드래그 동기화). 트랜스포머는 절대(화면) 좌표계로 렌더 —
+                앵커·스트로크는 줌 배율과 무관하게 화면 px */}
             <Transformer
               ref={transformerRef}
               resizeEnabled={isSingleSelection}
               rotateEnabled={isSingleSelection}
               keepRatio
               shiftBehavior="inverted"
+              rotationSnaps={shiftDown ? ROTATION_SNAPS : []}
+              rotationSnapTolerance={7}
               enabledAnchors={['top-left', 'top-right', 'bottom-left', 'bottom-right']}
               boundBoxFunc={boundMinSize}
               borderStroke={SELECTION_STROKE}
@@ -1003,6 +1529,44 @@ export function ProxyCanvas({
               anchorStroke={SELECTION_STROKE}
             />
           </Layer>
+          {snapOverlay && (
+            <Layer listening={false}>
+              {/* 드래그 스냅 가이드 — 정렬 성립 라인 + 인접 항목·문서와의 간격(mm) 라벨 */}
+              {snapOverlay.guides.map((guide, i) => (
+                <Line
+                  key={`snap-guide-${i}`}
+                  points={
+                    guide.axis === 'x'
+                      ? [guide.position, guide.from, guide.position, guide.to]
+                      : [guide.from, guide.position, guide.to, guide.position]
+                  }
+                  stroke={SNAP_GUIDE_STROKE}
+                  strokeWidth={1 / view.scale}
+                  dash={[6 / view.scale, 4 / view.scale]}
+                  perfectDrawEnabled={false}
+                />
+              ))}
+              {snapOverlay.labels.map((label, i) => {
+                const text = `${pxToMm(label.gapPx).toFixed(1)}mm`
+                const fontSize = 12 / view.scale
+                return (
+                  <Text
+                    key={`snap-label-${i}`}
+                    x={label.x - (text.length * fontSize * 0.62) / 2}
+                    y={label.y - fontSize * 0.7}
+                    text={text}
+                    fontSize={fontSize}
+                    fontFamily="ui-monospace, monospace"
+                    fill="#ecfeff"
+                    stroke="#155e75"
+                    strokeWidth={2.5 / view.scale}
+                    fillAfterStrokeEnabled
+                    perfectDrawEnabled={false}
+                  />
+                )
+              })}
+            </Layer>
+          )}
           {marquee && (
             <Layer listening={false}>
               {/* 마키 선택 박스 — 반투명 채움 + 대시 보더 (TECH §2.1 실시간 피드백) */}
@@ -1054,7 +1618,7 @@ export function ProxyCanvas({
             <div className="mx-0.5 h-5 w-px bg-zinc-800" />
             <OverlayButton
               onClick={() => setGridOpen(true)}
-              disabled={!selectedItem}
+              disabled={!selectedItem || selectedItem.locked === true}
               title="이미지 복제"
             >
               <Grid3x3 size={14} strokeWidth={1.5} />
@@ -1078,7 +1642,7 @@ export function ProxyCanvas({
             </OverlayButton>
             <OverlayButton
               onClick={() => handleFitMode('cover')}
-              disabled={!selectedItem}
+              disabled={!selectedItem || selectedItem.locked === true}
               title="화면 채우기 (cover)"
             >
               <Expand size={14} strokeWidth={1.5} />
@@ -1086,7 +1650,7 @@ export function ProxyCanvas({
             </OverlayButton>
             <OverlayButton
               onClick={() => handleFitMode('contain')}
-              disabled={!selectedItem}
+              disabled={!selectedItem || selectedItem.locked === true}
               title="안에 맞춤 (contain)"
             >
               <Shrink size={14} strokeWidth={1.5} />
@@ -1167,11 +1731,83 @@ export function ProxyCanvas({
           />
         )}
 
-        {/* 조작 힌트 */}
-        <div className="absolute bottom-3 left-3 select-none rounded-md border border-zinc-800 bg-zinc-900/95 px-3 py-1.5 text-[11px] text-zinc-500 backdrop-blur">
-          휠: 줌 · Space/휠 클릭 + 드래그: 팬 · 클릭: 선택 · 드래그: 이동 · 빈 곳 드래그: 영역 선택
-          · Ctrl+클릭: 선택 추가/해제 · 핸들: 크기(Shift: 자유 비율)·회전 · Ctrl+D: 복제 · R: 90°
-          회전 · Del: 삭제 · Ctrl+Z/Y: 실행취소·다시실행 · 이미지 드롭: 배치
+        {menu && (
+          <ContextMenu
+            x={menu.x}
+            y={menu.y}
+            viewportW={size.w}
+            viewportH={size.h}
+            selectionCount={selectedImages.length}
+            canGroup={canGroupMenu}
+            canUngroup={canUngroupMenu}
+            anyUnlocked={anySelectedUnlocked}
+            rootRef={menuRef}
+            onDuplicate={() => {
+              setMenu(null)
+              handleDuplicate()
+            }}
+            onDelete={() => {
+              setMenu(null)
+              handleDeleteSelection()
+            }}
+            onToggleLock={() => {
+              setMenu(null)
+              handleToggleLock()
+            }}
+            onGroup={() => {
+              setMenu(null)
+              handleGroup()
+            }}
+            onUngroup={() => {
+              setMenu(null)
+              handleUngroup()
+            }}
+            onAlign={(op) => {
+              setMenu(null)
+              handleAlign(op)
+            }}
+            onDocAlign={(op) => {
+              setMenu(null)
+              handleDocAlign(op)
+            }}
+            onOrder={(op) => {
+              setMenu(null)
+              handleOrder(op)
+            }}
+          />
+        )}
+
+        {/* 조작 힌트 + 방향키 이동 거리 스텝퍼 */}
+        <div className="absolute bottom-3 left-3 flex select-none items-center gap-3 rounded-md border border-zinc-800 bg-zinc-900/95 px-3 py-1.5 text-[11px] text-zinc-500 backdrop-blur">
+          <div className="leading-relaxed">
+            휠: 줌 · Space/휠 클릭 + 드래그: 팬 · 드래그: 이동(인접 항목·문서 가장자리 자동 스냅) ·
+            Shift 드래그: 축 고정 · Ctrl+드래그: 복제 · 빈 곳 드래그: 영역 선택 · 우클릭:
+            메뉴(정렬·문서 정렬·레이어·잠금) · 방향키: 이동(Shift: 1mm) · Ctrl+G: 그룹 ·
+            Ctrl+D/C/X/V: 복제/복사/잘라내기/붙여넣기 · Ctrl+L: 잠금 · R: 90° 회전 · Shift+회전: 15°
+            · Del: 삭제 · Ctrl+Z/Y: 실행취소·다시실행 · 이미지 드롭: 배치
+          </div>
+          <div className="flex items-center gap-1 border-l border-zinc-800 pl-3">
+            <span className="text-zinc-400">방향키 이동</span>
+            <button
+              type="button"
+              aria-label="이동 거리 1mm 감소"
+              disabled={nudgeStepMm <= NUDGE_MIN_MM}
+              onClick={() => setNudgeStepMm((v) => Math.max(NUDGE_MIN_MM, v - 1))}
+              className="flex h-5 w-5 items-center justify-center rounded border border-zinc-800 bg-zinc-900 text-zinc-400 transition-colors hover:bg-zinc-800 hover:text-zinc-200 active:scale-95 disabled:pointer-events-none disabled:opacity-40"
+            >
+              <Minus size={11} strokeWidth={2} />
+            </button>
+            <span className="w-10 text-center tabular-nums text-zinc-200">{nudgeStepMm} mm</span>
+            <button
+              type="button"
+              aria-label="이동 거리 1mm 증가"
+              disabled={nudgeStepMm >= NUDGE_MAX_MM}
+              onClick={() => setNudgeStepMm((v) => Math.min(NUDGE_MAX_MM, v + 1))}
+              className="flex h-5 w-5 items-center justify-center rounded border border-zinc-800 bg-zinc-900 text-zinc-400 transition-colors hover:bg-zinc-800 hover:text-zinc-200 active:scale-95 disabled:pointer-events-none disabled:opacity-40"
+            >
+              <Plus size={11} strokeWidth={2} />
+            </button>
+          </div>
         </div>
       </div>
 
@@ -1181,9 +1817,11 @@ export function ProxyCanvas({
         selectedIndex={selectedIndex >= 0 ? selectedIndex : null}
         multiSelectedCount={selectedIds.length}
         onAlign={handleAlign}
+        onDocAlign={handleDocAlign}
         onUpdate={handleUpdateSelected}
         onRotate90={handleRotate90}
         onOrder={handleOrder}
+        onToggleLock={handleToggleLock}
         onOpenGrid={() => setGridOpen(true)}
         onRemoveBg={handleRemoveBg}
         removeBusy={removeBusy}
@@ -1202,8 +1840,10 @@ interface SceneImageProps {
   /** 선택 스트로크 두께(절대 px) — 줌 배율 역보정값(화면 2px 고정)을 호출자가 계산해 전달 */
   selectionStrokeWidth: number
   onSelect: (id: string, additive: boolean) => void
+  /** mouseup(무이동) — Ctrl 토글 해제 지연 확정 */
+  onSelectEnd: (id: string) => void
   onDragStart: (id: string) => void
-  onDragMove: (id: string, node: Konva.Node) => void
+  onDragMove: (id: string, e: Konva.KonvaEventObject<DragEvent>) => void
   onDragEnd: (id: string, x: number, y: number) => void
   onTransform: (id: string, reading: NodeTransformReading) => void
 }
@@ -1254,6 +1894,7 @@ function SceneImage({
   selected,
   selectionStrokeWidth,
   onSelect,
+  onSelectEnd,
   onDragStart,
   onDragMove,
   onDragEnd,
@@ -1270,13 +1911,14 @@ function SceneImage({
       width={placed.widthPx}
       height={placed.heightPx}
       image={el}
-      draggable={draggable}
-      stroke={selected ? SELECTION_STROKE : undefined}
+      draggable={draggable && placed.locked !== true}
+      stroke={selected ? (placed.locked ? LOCKED_STROKE : SELECTION_STROKE) : undefined}
       strokeWidth={selected ? selectionStrokeWidth : undefined}
       strokeHitEnabled={false}
       onMouseDown={(e) => onSelect(placed.id, e.evt.ctrlKey || e.evt.metaKey)}
+      onMouseUp={() => onSelectEnd(placed.id)}
       onDragStart={() => onDragStart(placed.id)}
-      onDragMove={(e) => onDragMove(placed.id, e.currentTarget)}
+      onDragMove={(e) => onDragMove(placed.id, e)}
       onDragEnd={(e) => onDragEnd(placed.id, e.currentTarget.x(), e.currentTarget.y())}
       onTransformEnd={(e) => {
         // 트랜스포머는 리사이즈를 임시 scaleX/scaleY로 적용한다. 판독 직후 노드에 1로 리셋 —

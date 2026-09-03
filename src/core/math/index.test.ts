@@ -12,7 +12,9 @@ import {
   cmToPx,
   getCanvasHeightPx,
   getCanvasWidthPx,
-  pxToCm
+  mmToPx,
+  pxToCm,
+  pxToMm
 } from './index'
 
 describe('cmToPx', () => {
@@ -44,6 +46,34 @@ describe('pxToCm', () => {
 
   it('0px → 0cm', () => {
     expect(pxToCm(0)).toBe(0)
+  })
+})
+
+describe('mmToPx — 방향키 이동 거리 환산', () => {
+  it('25.4mm @ 350dpi → 350px (단위 환산 항등)', () => {
+    expect(mmToPx(25.4, 350)).toBeCloseTo(350)
+  })
+
+  it('기본 이동 거리 5mm → 68.897…px (반올림 없음 — 누적 드리프트 방지)', () => {
+    expect(mmToPx(5)).toBeCloseTo(68.897637795, 6)
+  })
+
+  it('1mm 미세 이동 → 13.779…px (Shift+방향키)', () => {
+    expect(mmToPx(1)).toBeCloseTo(13.779527559, 6)
+  })
+
+  it('0mm → 0px', () => {
+    expect(mmToPx(0)).toBe(0)
+  })
+})
+
+describe('pxToMm', () => {
+  it('350px @ 350dpi → 25.4mm (mmToPx 역변환)', () => {
+    expect(pxToMm(350, 350)).toBeCloseTo(25.4)
+  })
+
+  it('환산 왕복 항등 — mm→px→mm', () => {
+    expect(pxToMm(mmToPx(7))).toBeCloseTo(7)
   })
 })
 

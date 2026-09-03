@@ -22,13 +22,15 @@ import {
   Link2,
   Link2Off,
   Loader2,
+  Lock,
   MousePointerClick,
   Move,
-  RotateCw
+  RotateCw,
+  Unlock
 } from 'lucide-react'
 import { cmToPx, pxToCm } from '../../../core/math'
 import { normalizeRotation, type LayerOrderOp } from './canvas/placement'
-import type { AlignOp } from './canvas/alignment'
+import type { AlignOp, DocAlignOp } from './canvas/alignment'
 import type { PlacedImage } from './canvas/ProxyCanvas'
 
 const ICON = { size: 15, strokeWidth: 1.5 } as const
@@ -40,9 +42,11 @@ export interface PropertiesPanelProps {
   /** 다중 선택 개수 — 2 이상이면 정렬 패널이 편집 패널을 대체한다 */
   multiSelectedCount: number
   onAlign: (op: AlignOp) => void
+  onDocAlign: (op: DocAlignOp) => void
   onUpdate: (patch: Partial<PlacedImage>) => void
   onRotate90: () => void
   onOrder: (op: LayerOrderOp) => void
+  onToggleLock: () => void
   onOpenGrid: () => void
   onRemoveBg: () => void
   removeBusy: boolean
@@ -170,15 +174,26 @@ const fileBaseName = (filePath: string): string => filePath.split(/[\\/]/).pop()
 
 const formatCm = (px: number): string => pxToCm(px).toFixed(1)
 
+const DOC_ALIGN_BUTTONS: ReadonlyArray<{ op: DocAlignOp; label: string }> = [
+  { op: 'docLeft', label: '문서 좌측에 정렬' },
+  { op: 'docCenterH', label: '문서 가로 중앙에 정렬' },
+  { op: 'docRight', label: '문서 우측에 정렬' },
+  { op: 'docTop', label: '문서 상단에 정렬' },
+  { op: 'docCenterV', label: '문서 세로 중앙에 정렬' },
+  { op: 'docBottom', label: '문서 하단에 정렬' }
+]
+
 export function PropertiesPanel({
   item,
   itemCount,
   selectedIndex,
   multiSelectedCount,
   onAlign,
+  onDocAlign,
   onUpdate,
   onRotate90,
   onOrder,
+  onToggleLock,
   onOpenGrid,
   onRemoveBg,
   removeBusy,
@@ -262,9 +277,59 @@ export function PropertiesPanel({
                 <AlignVerticalJustifyCenter size={ICON.size} strokeWidth={ICON.strokeWidth} />
               </IconBtn>
             </div>
+            <div className="mt-3 text-[10px] font-medium uppercase tracking-wide text-zinc-500">
+              문서 기준 (선택 전체)
+            </div>
+            <div className="mt-1 grid grid-cols-3 gap-1.5">
+              {DOC_ALIGN_BUTTONS.map(({ op, label }) => (
+                <IconBtn key={op} label={label} onClick={() => onDocAlign(op)}>
+                  {op === 'docLeft' ? (
+                    <AlignStartVertical size={ICON.size} strokeWidth={ICON.strokeWidth} />
+                  ) : op === 'docCenterH' ? (
+                    <AlignCenterVertical size={ICON.size} strokeWidth={ICON.strokeWidth} />
+                  ) : op === 'docRight' ? (
+                    <AlignEndVertical size={ICON.size} strokeWidth={ICON.strokeWidth} />
+                  ) : op === 'docTop' ? (
+                    <AlignStartHorizontal size={ICON.size} strokeWidth={ICON.strokeWidth} />
+                  ) : op === 'docCenterV' ? (
+                    <AlignCenterHorizontal size={ICON.size} strokeWidth={ICON.strokeWidth} />
+                  ) : (
+                    <AlignEndHorizontal size={ICON.size} strokeWidth={ICON.strokeWidth} />
+                  )}
+                </IconBtn>
+              ))}
+            </div>
             <p className="mt-2 text-[10px] leading-relaxed text-zinc-500">
-              {multiSelectedCount}개 항목을 회전된 표시 영역 기준으로 정렬합니다. 모든 정렬은
-              Ctrl+Z로 되돌릴 수 있습니다.
+              {multiSelectedCount}개 항목을 회전된 표시 영역 기준으로 정렬합니다. 문서 기준은 선택
+              전체를 문서 가장자리·중앙에 맞춥니다. 모든 정렬은 Ctrl+Z로 되돌릴 수 있습니다.
+            </p>
+          </Section>
+          <Section
+            title="레이어 순서"
+            icon={<Layers size={ICON.size} strokeWidth={ICON.strokeWidth} />}
+          >
+            <div className="grid grid-cols-4 gap-1.5">
+              <IconBtn
+                label={`맨 앞으로 (${multiSelectedCount}개)`}
+                onClick={() => onOrder('front')}
+              >
+                <ArrowUpToLine size={ICON.size} strokeWidth={ICON.strokeWidth} />
+              </IconBtn>
+              <IconBtn
+                label={`앞으로 (${multiSelectedCount}개)`}
+                onClick={() => onOrder('forward')}
+              >
+                <ChevronUp size={ICON.size} strokeWidth={ICON.strokeWidth} />
+              </IconBtn>
+              <IconBtn label={`뒤로 (${multiSelectedCount}개)`} onClick={() => onOrder('backward')}>
+                <ChevronDown size={ICON.size} strokeWidth={ICON.strokeWidth} />
+              </IconBtn>
+              <IconBtn label={`맨 뒤로 (${multiSelectedCount}개)`} onClick={() => onOrder('back')}>
+                <ArrowDownToLine size={ICON.size} strokeWidth={ICON.strokeWidth} />
+              </IconBtn>
+            </div>
+            <p className="mt-2 text-[10px] leading-relaxed text-zinc-500">
+              선택 {multiSelectedCount}개의 상대 레이어 순서를 유지한 채 통째로 이동합니다.
             </p>
           </Section>
           <Section
@@ -396,11 +461,62 @@ export function PropertiesPanel({
                 <span className="text-[10px] font-medium uppercase tracking-wide text-zinc-500">
                   변형
                 </span>
-                <IconBtn label="90도 회전" onClick={onRotate90}>
+                <IconBtn label="90도 회전" onClick={onRotate90} disabled={item.locked === true}>
                   <RotateCw size={ICON.size} strokeWidth={ICON.strokeWidth} />
                 </IconBtn>
               </div>
             </div>
+
+            <div className="mt-2 flex gap-1.5">
+              <IconBtn
+                label={item.locked ? '잠금 해제 (Ctrl+L)' : '잠금 (Ctrl+L)'}
+                onClick={onToggleLock}
+              >
+                {item.locked ? (
+                  <Unlock size={ICON.size} strokeWidth={ICON.strokeWidth} />
+                ) : (
+                  <Lock size={ICON.size} strokeWidth={ICON.strokeWidth} />
+                )}
+              </IconBtn>
+              {item.locked && (
+                <p className="flex-1 self-center text-[10px] leading-relaxed text-amber-500/90">
+                  잠김 — 이동·리사이즈·삭제·정렬이 차단됩니다. Ctrl+L 또는 버튼으로 해제.
+                </p>
+              )}
+            </div>
+          </Section>
+
+          <Section
+            title="문서 기준 정렬"
+            icon={<AlignCenterVertical size={ICON.size} strokeWidth={ICON.strokeWidth} />}
+          >
+            <div className="grid grid-cols-3 gap-1.5">
+              {DOC_ALIGN_BUTTONS.map(({ op, label }) => (
+                <IconBtn
+                  key={op}
+                  label={label}
+                  onClick={() => onDocAlign(op)}
+                  disabled={item.locked === true}
+                >
+                  {op === 'docLeft' ? (
+                    <AlignStartVertical size={ICON.size} strokeWidth={ICON.strokeWidth} />
+                  ) : op === 'docCenterH' ? (
+                    <AlignCenterVertical size={ICON.size} strokeWidth={ICON.strokeWidth} />
+                  ) : op === 'docRight' ? (
+                    <AlignEndVertical size={ICON.size} strokeWidth={ICON.strokeWidth} />
+                  ) : op === 'docTop' ? (
+                    <AlignStartHorizontal size={ICON.size} strokeWidth={ICON.strokeWidth} />
+                  ) : op === 'docCenterV' ? (
+                    <AlignCenterHorizontal size={ICON.size} strokeWidth={ICON.strokeWidth} />
+                  ) : (
+                    <AlignEndHorizontal size={ICON.size} strokeWidth={ICON.strokeWidth} />
+                  )}
+                </IconBtn>
+              ))}
+            </div>
+            <p className="mt-2 text-[10px] leading-relaxed text-zinc-500">
+              회전된 표시 영역 기준으로 문서 가장자리·중앙에 맞춥니다 (선택 1개만으로 동작).
+            </p>
           </Section>
 
           <Section

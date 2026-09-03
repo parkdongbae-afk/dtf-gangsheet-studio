@@ -1,7 +1,32 @@
 # summary.md — DTF GangSheet Studio 진행 상황
-갱신: 2026-09-03 / 완료: v0.2.1 — .dtf 저장 소수 치수 검증 결함 수정 (한글 내보내기는 패키지 실측 정상) / 이전: v0.2.0 릴리즈
+갱신: 2026-09-03 / 완료: 방향키 이동(mm)·Ctrl 드래그 복제·그룹·우클릭 메뉴(정렬 포함) / 이전: v0.2.1 — .dtf 저장 소수 치수 검증 결함 수정
 
 ## 현재 상태
+- **키보드 이동·Ctrl 드래그 복제·그룹·우클릭 메뉴 (2026-09-03 요청)**:
+  - **방향키 이동**: 기본 5mm(350DPI mmToPx 반올림 없음), Shift+방향키=1mm 미세,
+    하단 힌트바 스텝퍼로 1~50mm 1mm 단위 조절. 연속 누름은 900ms 창 coalesce로
+    undo 1단계 유지(commitImages coalesceKey 확장). 다중 선택·그룹 전체 이동.
+  - **Ctrl+드래그 복제**: mousedown modifier를 gestureRef에 캡처 → dragstart에서
+    선택 전체 사본을 그 자리에 씬 추가(히스토리 없이, 그룹 id 재매핑, 사본 선택) →
+    원본 노드는 제자리 고정하고 사본만 이동(dragmove에서 node.position 제어) →
+    dragend 단일 커밋(undo 기준=복제 이전 씬 preScene — 되돌리면 복제 전체 소멸).
+    무이동(클릭성)이면 사본 제거·원 선택 복원. duplicate 모드는 dragend 노드 위치를
+    믿을 수 없어 세션에 lastDelta 추적(핵심 함정). Ctrl+클릭 해제 토글과의 충돌은
+    mouseup까지 지연(pendingToggleOff)으로 해소 — 드래그로 이어지면 복제 우선.
+  - **Ctrl+Shift+드래그**: 우세 축 제약(constrainAxis, |dx|≥|dy|→수평) 수평·수직
+    복제. 일반 드래그+Shift도 동일 축 고정 이동으로 적용.
+  - **그룹**: PlacedImage.groupId 선택 필드(.dtf 저장·검증 — v1 하위 호환, 빈 값
+    정규화). 클릭·마키·Ctrl 추가 선택 시 그룹 전체 확장(expandSelectionToGroups),
+    Ctrl+클릭 해제도 그룹 단위. Ctrl+G / Ctrl+Shift+G. 복제(Ctrl+D·드래그) 시 사본
+    그룹은 새 groupId로 재매핑. grouping.ts 순수 함수 5종 신규.
+  - **우클릭 컨텍스트 메뉴**(ContextMenu.tsx 신규): 복제(Ctrl+D)·삭제(Del)·그룹
+    만들기·그룹 해제·정렬 6종 아이콘 그리드+수평·수직 분배(기존 alignItems 재사용).
+    뷰포트 경계 클램프, 바깥 mousedown(캡처)·휠·창 블러·Esc 닫힘. 이미지 우클릭은
+    미선택 시 선택 후 열고, 빈 곳 우클릭은 선택 해제. 단축키 힌트바 전면 갱신.
+  - **검증**: Vitest 163(신규 28 — grouping 14·math 6·placement 4·project 3) ·
+    lint 0 · typecheck 0 · `npm run build` 번들 ok. 드래그·메뉴 인터랙션은
+    Electron 실기 E2E 미실시 — 차기 후보(마키·복제·그룹 시나리오).
+  - 커밋·푸시는 사용자 요청 전 보류.
 - **.dtf 저장 결함 수정 (2026-09-03 접수 — "images[6].heightPx must be a positive
   integer, got 1206.996…")**: 리사이즈(Transformer)·비율 연산(링크 치수·fitToCanvas)은
   소수 px를 정상적으로 만드는데 스키마 검증이 양의 정수로 과하게 강제해 저장 전체가

@@ -19,6 +19,10 @@ export interface ProjectImage {
   x: number
   y: number
   rotation: number
+  /** 선택적 그룹 식별자 — 같은 groupId를 공유하는 항목이 하나의 그룹 (v1 하위 호환) */
+  groupId?: string
+  /** 잠금 — 이동·삭제 등 편집 보호 (v1 하위 호환, 미저장 시 false) */
+  locked?: boolean
 }
 
 export interface ProjectDocument {
@@ -56,7 +60,11 @@ const requirePositiveInt = (
 }
 
 /** 항목 치수 — 리사이즈·비율 연산 결과는 소수(예: 1206.99…px)가 정상이므로 정수 강제 금지 */
-const requirePositive = (container: Record<string, unknown>, key: string, label: string): number => {
+const requirePositive = (
+  container: Record<string, unknown>,
+  key: string,
+  label: string
+): number => {
   const value = container[key]
   if (!isFiniteNumber(value) || value <= 0) {
     throw new ProjectFormatError(`${label} must be a positive number, got ${String(value)}`)
@@ -122,7 +130,10 @@ export function validateProjectData(raw: unknown): ProjectData {
       heightPx: requirePositive(item, 'heightPx', `${label}.heightPx`),
       x: requireFinite(item, 'x', `${label}.x`),
       y: requireFinite(item, 'y', `${label}.y`),
-      rotation: requireFinite(item, 'rotation', `${label}.rotation`)
+      rotation: requireFinite(item, 'rotation', `${label}.rotation`),
+      groupId:
+        typeof item.groupId === 'string' && item.groupId.length > 0 ? item.groupId : undefined,
+      locked: item.locked === true ? true : undefined
     }
   })
   return {

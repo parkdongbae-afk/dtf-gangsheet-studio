@@ -3,10 +3,12 @@ import {
   calculateGridPositions,
   centeredTopLeft,
   commitTransform,
+  constrainAxis,
   duplicateOffset,
   fitToCanvas,
   normalizeRotation,
   reorderItem,
+  reorderItems,
   screenToDoc,
   viewCenterDoc,
   type FitSource,
@@ -55,6 +57,26 @@ describe('centeredTopLeft', () => {
     const p = centeredTopLeft(10, 10, { x: 0, y: 0 }, 0, 8)
     const q = centeredTopLeft(10, 10, { x: 0, y: 0 }, 1, 8)
     expect(q.x - p.x).toBeCloseTo(3) // 24 ÷ 8
+  })
+})
+
+describe('constrainAxis — Shift 드래그 축 고정', () => {
+  it('수평 우세 → 세로 성분 제거', () => {
+    expect(constrainAxis(120, 30)).toEqual({ dx: 120, dy: 0 })
+  })
+
+  it('수직 우세 → 가로 성분 제거', () => {
+    expect(constrainAxis(-10, 400)).toEqual({ dx: 0, dy: 400 })
+  })
+
+  it('동점·정지는 수평 우선', () => {
+    expect(constrainAxis(50, 50)).toEqual({ dx: 50, dy: 0 })
+    expect(constrainAxis(0, 0)).toEqual({ dx: 0, dy: 0 })
+  })
+
+  it('음수 방향 처리', () => {
+    expect(constrainAxis(-300, -20)).toEqual({ dx: -300, dy: 0 })
+    expect(constrainAxis(-5, -80)).toEqual({ dx: 0, dy: -80 })
   })
 })
 
@@ -313,5 +335,49 @@ describe('reorderItem — 레이어 순서 (배열 순서 = z순서)', () => {
     const result = reorderItem(items, 'zzz', 'front')
     expect(result).toEqual(items)
     expect(result).not.toBe(items)
+  })
+})
+
+describe('reorderItems — 다중 선택 레이어 일괄 이동', () => {
+  const ids = (list: { id: string }[]): string[] => list.map((i) => i.id)
+  const items = [{ id: 'a' }, { id: 'b' }, { id: 'c' }, { id: 'd' }, { id: 'e' }]
+
+  it('front — 선택 블록이 상대 순서 유지한 채 맨 뒤로', () => {
+    expect(ids(reorderItems(items, ['b', 'd'], 'front'))).toEqual(['a', 'c', 'e', 'b', 'd'])
+  })
+
+  it('back — 선택 블록을 맨 앞으로', () => {
+    expect(ids(reorderItems(items, ['c', 'e'], 'back'))).toEqual(['c', 'e', 'a', 'b', 'd'])
+  })
+
+  it('forward — 인접하지 않은 선택들도 비선택과 맞바꿔 한 걸음씩 전진', () => {
+    // b,d 선택: d는 e와 스왑, b는 c와 스왑
+    expect(ids(reorderItems(items, ['b', 'd'], 'forward'))).toEqual(['a', 'c', 'b', 'e', 'd'])
+  })
+
+  it('forward — 연속 블록 [b,c]는 통째로 한 걸음 전진', () => {
+    expect(ids(reorderItems(items, ['b', 'c'], 'forward'))).toEqual(['a', 'd', 'b', 'c', 'e'])
+  })
+
+  it('backward — 연속 블록 [c,d]는 통째로 한 걸음 후퇴', () => {
+    expect(ids(reorderItems(items, ['c', 'd'], 'backward'))).toEqual(['a', 'c', 'd', 'b', 'e'])
+  })
+
+  it('경계 no-op — 맨 뒤 전체 forward·맨 앞 전체 backward는 순서 불변', () => {
+    expect(ids(reorderItems(items, ['e'], 'forward'))).toEqual(ids(items))
+    expect(ids(reorderItems(items, ['a'], 'backward'))).toEqual(ids(items))
+  })
+
+  it('빈·미포함 id 목록 — 원본과 동일한 내용의 새 배열', () => {
+    expect(reorderItems(items, [], 'front')).toEqual(items)
+    const unknown = reorderItems(items, ['x', 'y'], 'front')
+    expect(unknown).toEqual(items)
+    expect(unknown).not.toBe(items)
+  })
+
+  it('단일 선택은 reorderItem forward와 동일 결과', () => {
+    expect(ids(reorderItems(items, ['b'], 'forward'))).toEqual(
+      ids(reorderItem(items, 'b', 'forward'))
+    )
   })
 })

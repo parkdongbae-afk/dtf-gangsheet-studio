@@ -73,6 +73,57 @@ export function marqueeSelection(
 export type AlignOp =
   'left' | 'centerH' | 'right' | 'top' | 'centerV' | 'bottom' | 'distH' | 'distV'
 
+/** 문서 기준 정렬 연산 — 선택 1개만으로도 문서 가장자리·중앙축에 정렬 (델타 기능) */
+export type DocAlignOp =
+  'docLeft' | 'docCenterH' | 'docRight' | 'docTop' | 'docCenterV' | 'docBottom'
+
+/**
+ * 문서 기준 정렬 — 선택 전체 union bbox의 모서리·중심축을 문서(0..docW, 0..docH)의
+ * 모서리·중앙에 맞춘다. union 전체에 동일 평행이동을 적용하므로 항목 간 상대 위치가
+ * 불변이다. 개수 제한 없음(1개 허용), 빈 선택은 null. 회전 바운딩 박스 기준 —
+ * 화면 표시 경계와 일치 (alignItems와 동일 규약).
+ */
+export function alignToDocument(
+  items: readonly AlignableItem[],
+  op: DocAlignOp,
+  docW: number,
+  docH: number
+): ItemMove[] | null {
+  if (items.length === 0) return null
+
+  const boxes = items.map((item) => rotatedBBox(item))
+  const xMin = Math.min(...boxes.map((b) => b.left))
+  const xMax = Math.max(...boxes.map((b) => b.right))
+  const yMin = Math.min(...boxes.map((b) => b.top))
+  const yMax = Math.max(...boxes.map((b) => b.bottom))
+  const width = xMax - xMin
+  const height = yMax - yMin
+
+  let shiftX = 0
+  let shiftY = 0
+  switch (op) {
+    case 'docLeft':
+      shiftX = -xMin
+      break
+    case 'docCenterH':
+      shiftX = docW / 2 - width / 2 - xMin
+      break
+    case 'docRight':
+      shiftX = docW - width - xMin
+      break
+    case 'docTop':
+      shiftY = -yMin
+      break
+    case 'docCenterV':
+      shiftY = docH / 2 - height / 2 - yMin
+      break
+    case 'docBottom':
+      shiftY = docH - height - yMin
+      break
+  }
+  return items.map((item) => ({ id: item.id, x: item.x + shiftX, y: item.y + shiftY }))
+}
+
 /** 정렬 결과 — 순수 평행이동(회전·치수 불변), 씬 배열 순과 동일한 id 순서 */
 export interface ItemMove {
   id: string

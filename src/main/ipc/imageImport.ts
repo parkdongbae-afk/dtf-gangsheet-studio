@@ -14,6 +14,7 @@ import { BrowserWindow, dialog, ipcMain, nativeImage } from 'electron'
 import { statSync } from 'fs'
 import { basename, resolve } from 'path'
 import type { ImportedImage } from '../../types/ipc'
+import { readLastDir, saveLastDir } from './dialogMemory'
 
 /** 프리뷰 최대 변 길이 (px) */
 const PREVIEW_MAX_PX = 2_048
@@ -62,18 +63,21 @@ export function makePreview(absPath: string): ImportedImage {
 }
 
 export function registerImageImportIpc(): void {
-  /** 파일 대화상자 — 다중 선택, 취소 시 null */
+  /** 파일 대화상자 — 다중 선택, 취소 시 null. 마지막 가져오기 폴더에서 시작 */
   ipcMain.handle('dialog:open-images', async (event) => {
     const owner = BrowserWindow.fromWebContents(event.sender)
     const opts: Electron.OpenDialogOptions = {
       title: '이미지 가져오기',
       filters: DIALOG_FILTERS,
-      properties: ['openFile', 'multiSelections']
+      properties: ['openFile', 'multiSelections'],
+      defaultPath: readLastDir('import')
     }
     const result = owner
       ? await dialog.showOpenDialog(owner, opts)
       : await dialog.showOpenDialog(opts)
-    return result.canceled ? null : result.filePaths
+    if (result.canceled || result.filePaths.length === 0) return null
+    saveLastDir('import', ...result.filePaths)
+    return result.filePaths
   })
 
   /** 경로 → 프리뷰 임포트. mtime 일치 캐시 히트 시 즉시 반환 */
