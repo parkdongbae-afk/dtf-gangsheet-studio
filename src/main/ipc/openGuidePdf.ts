@@ -36,4 +36,5 @@ function registerOpenPdfIpc(channel: string, pdfName: string): void {
 export function registerGuidePdfIpc(): void {
   registerOpenPdfIpc('util:open-guide-pdf', 'photoshop_cloud_guide.pdf')
   registerOpenPdfIpc('util:open-manual-pdf', 'DTF_사용자_메뉴얼.pdf')
+  registerOpenPdfIpc('util:open-licenses', 'THIRD_PARTY_LICENSES.txt')
 }

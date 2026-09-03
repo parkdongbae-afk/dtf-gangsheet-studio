@@ -33,6 +33,9 @@ extraResources:
   # 속성 패널 푸터 "사용자 메뉴얼" 버튼용 PDF — 동일 경로 계약
   - from: resources/DTF_사용자_메뉴얼.pdf
     to: DTF_사용자_메뉴얼.pdf
+  # 오픈소스 라이선스 고지(MIT/Apache/BSD 등 전문) — 설치 폴더 배치 + 앱 내 열기
+  - from: resources/THIRD_PARTY_LICENSES.txt
+    to: THIRD_PARTY_LICENSES.txt
 win:
   executableName: DTFGangSheetStudio
   icon: build/icon.ico

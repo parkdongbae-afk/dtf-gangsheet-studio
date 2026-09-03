@@ -26,6 +26,7 @@ import {
   MousePointerClick,
   Move,
   RotateCw,
+  Scale,
   Unlock
 } from 'lucide-react'
 import { cmToPx, pxToCm } from '../../../core/math'
@@ -624,6 +625,16 @@ export function PropertiesPanel({
         >
           <BookOpen size={13} strokeWidth={1.5} className="shrink-0 text-zinc-400" />
           <span className="flex-1 text-left">사용자 메뉴얼 (PDF)</span>
+          <ExternalLink size={11} strokeWidth={1.5} className="shrink-0 text-zinc-600" />
+        </button>
+        <button
+          type="button"
+          onClick={() => void window.api?.openLicenses()}
+          title="이 앱이 사용하는 오픈소스 라이브러리의 라이선스 고지를 엽니다"
+          className="flex items-center gap-2 rounded-md border border-zinc-800 bg-zinc-900 px-3 py-1.5 text-xs text-zinc-300 transition-colors hover:bg-zinc-800 active:scale-[0.98]"
+        >
+          <Scale size={13} strokeWidth={1.5} className="shrink-0 text-zinc-400" />
+          <span className="flex-1 text-left">오픈소스 라이선스</span>
           <ExternalLink size={11} strokeWidth={1.5} className="shrink-0 text-zinc-600" />
         </button>
       </div>
