@@ -1,5 +1,13 @@
 import { useState } from 'react'
 import {
+  AlignCenterHorizontal,
+  AlignCenterVertical,
+  AlignEndHorizontal,
+  AlignEndVertical,
+  AlignHorizontalJustifyCenter,
+  AlignStartHorizontal,
+  AlignStartVertical,
+  AlignVerticalJustifyCenter,
   ArrowDownToLine,
   ArrowUpToLine,
   BookOpen,
@@ -20,6 +28,7 @@ import {
 } from 'lucide-react'
 import { cmToPx, pxToCm } from '../../../core/math'
 import { normalizeRotation, type LayerOrderOp } from './canvas/placement'
+import type { AlignOp } from './canvas/alignment'
 import type { PlacedImage } from './canvas/ProxyCanvas'
 
 const ICON = { size: 15, strokeWidth: 1.5 } as const
@@ -28,6 +37,9 @@ export interface PropertiesPanelProps {
   item: PlacedImage | null
   itemCount: number
   selectedIndex: number | null
+  /** 다중 선택 개수 — 2 이상이면 정렬 패널이 편집 패널을 대체한다 */
+  multiSelectedCount: number
+  onAlign: (op: AlignOp) => void
   onUpdate: (patch: Partial<PlacedImage>) => void
   onRotate90: () => void
   onOrder: (op: LayerOrderOp) => void
@@ -162,6 +174,8 @@ export function PropertiesPanel({
   item,
   itemCount,
   selectedIndex,
+  multiSelectedCount,
+  onAlign,
   onUpdate,
   onRotate90,
   onOrder,
@@ -171,6 +185,8 @@ export function PropertiesPanel({
   onOpenBgSites
 }: PropertiesPanelProps): React.JSX.Element {
   const [linked, setLinked] = useState(true)
+  const multi = !item && multiSelectedCount >= 2
+  const canDistribute = multiSelectedCount >= 3
 
   const commitWidth = (valueCm: number): void => {
     if (!item || valueCm <= 0) return
@@ -192,7 +208,11 @@ export function PropertiesPanel({
         <div className="flex flex-col">
           <span className="text-sm font-semibold text-zinc-100">속성</span>
           <span className="max-w-[180px] truncate text-[10px] text-zinc-500">
-            {item ? fileBaseName(item.filePath) : '선택 없음'}
+            {multi
+              ? `${multiSelectedCount}개 다중 선택`
+              : item
+                ? fileBaseName(item.filePath)
+                : '선택 없음'}
           </span>
         </div>
         <span className="rounded border border-zinc-800 bg-zinc-900 px-1.5 py-0.5 text-[10px] tabular-nums text-zinc-500">
@@ -200,7 +220,65 @@ export function PropertiesPanel({
         </span>
       </div>
 
-      {!item ? (
+      {multi ? (
+        <div className="flex-1 overflow-y-auto">
+          <Section
+            title="정렬"
+            icon={<AlignCenterVertical size={ICON.size} strokeWidth={ICON.strokeWidth} />}
+          >
+            <div className="grid grid-cols-3 gap-1.5">
+              <IconBtn label="좌측 정렬" onClick={() => onAlign('left')}>
+                <AlignStartVertical size={ICON.size} strokeWidth={ICON.strokeWidth} />
+              </IconBtn>
+              <IconBtn label="가로 중앙 정렬" onClick={() => onAlign('centerH')}>
+                <AlignCenterVertical size={ICON.size} strokeWidth={ICON.strokeWidth} />
+              </IconBtn>
+              <IconBtn label="우측 정렬" onClick={() => onAlign('right')}>
+                <AlignEndVertical size={ICON.size} strokeWidth={ICON.strokeWidth} />
+              </IconBtn>
+              <IconBtn label="상단 정렬" onClick={() => onAlign('top')}>
+                <AlignStartHorizontal size={ICON.size} strokeWidth={ICON.strokeWidth} />
+              </IconBtn>
+              <IconBtn label="세로 중앙 정렬" onClick={() => onAlign('centerV')}>
+                <AlignCenterHorizontal size={ICON.size} strokeWidth={ICON.strokeWidth} />
+              </IconBtn>
+              <IconBtn label="하단 정렬" onClick={() => onAlign('bottom')}>
+                <AlignEndHorizontal size={ICON.size} strokeWidth={ICON.strokeWidth} />
+              </IconBtn>
+            </div>
+            <div className="mt-1.5 grid grid-cols-2 gap-1.5">
+              <IconBtn
+                label="수평 간격 균등 분배 (3개 이상)"
+                onClick={() => onAlign('distH')}
+                disabled={!canDistribute}
+              >
+                <AlignHorizontalJustifyCenter size={ICON.size} strokeWidth={ICON.strokeWidth} />
+              </IconBtn>
+              <IconBtn
+                label="수직 간격 균등 분배 (3개 이상)"
+                onClick={() => onAlign('distV')}
+                disabled={!canDistribute}
+              >
+                <AlignVerticalJustifyCenter size={ICON.size} strokeWidth={ICON.strokeWidth} />
+              </IconBtn>
+            </div>
+            <p className="mt-2 text-[10px] leading-relaxed text-zinc-500">
+              {multiSelectedCount}개 항목을 회전된 표시 영역 기준으로 정렬합니다. 모든 정렬은
+              Ctrl+Z로 되돌릴 수 있습니다.
+            </p>
+          </Section>
+          <div className="flex flex-col items-center gap-2 px-6 py-8 text-center">
+            <MousePointerClick size={20} strokeWidth={1.5} className="text-zinc-600" />
+            <span className="text-xs text-zinc-500">
+              {multiSelectedCount}개 항목이 선택되었습니다
+            </span>
+            <span className="text-[10px] text-zinc-600">
+              드래그하면 함께 이동하고 · Ctrl+클릭으로 개별 해제 · 1개만 남기면 수치 편집이
+              가능합니다
+            </span>
+          </div>
+        </div>
+      ) : !item ? (
         <div className="flex flex-1 flex-col items-center justify-center gap-2 px-6 text-center">
           <MousePointerClick size={20} strokeWidth={1.5} className="text-zinc-600" />
           <span className="text-xs text-zinc-500">선택된 항목 없음</span>
@@ -367,11 +445,13 @@ export function PropertiesPanel({
 
       <div className="flex flex-col gap-1.5 border-t border-zinc-800 px-3 py-2.5">
         <div className="flex items-center justify-between text-[10px] tabular-nums text-zinc-500">
-          <span>{item ? '선택 영역' : '문서'}</span>
+          <span>{item ? '선택 영역' : multi ? '다중 선택' : '문서'}</span>
           <span className="text-zinc-300">
             {item
               ? `${formatCm(item.widthPx)} × ${formatCm(item.heightPx)} cm`
-              : `배치 ${itemCount}개`}
+              : multi
+                ? `${multiSelectedCount}개 선택`
+                : `배치 ${itemCount}개`}
           </span>
         </div>
         <button

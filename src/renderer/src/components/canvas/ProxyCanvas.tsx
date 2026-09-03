@@ -21,6 +21,7 @@ import { NestingDialog } from './NestingDialog'
 import { RulerOverlay } from './RulerOverlay'
 import { BgSitesDialog } from '../BgSitesDialog'
 import { packImages } from './autoNesting'
+import { alignItems, marqueeSelection, type AlignOp } from './alignment'
 import {
   DEFAULT_GRID_SETTINGS,
   gridDash,
@@ -85,6 +86,8 @@ const SELECTION_STROKE = '#6366f1'
 const MIN_TRANSFORM_PX = 5
 /** undo 히스토리 상한 (단계) — 초과분은 가장 오래된 스냅샷부터 폐기 */
 const UNDO_LIMIT = 100
+/** 마키 시작을 클릭으로 판정하는 화면 px 임계 — 미만 이동은 선택 해제로만 처리 */
+const MARQUEE_CLICK_PX = 3
 
 const boundMinSize = (oldBox: Box, newBox: Box): Box =>
   newBox.width < MIN_TRANSFORM_PX || newBox.height < MIN_TRANSFORM_PX ? oldBox : newBox
@@ -135,7 +138,16 @@ export function ProxyCanvas({ widthPx, heightPx }: ProxyCanvasProps): React.JSX.
     past: [],
     future: []
   })
-  const [selectedId, setSelectedId] = useState<string | null>(null)
+  /** 다중 선택 (.agent/tech.md §3) — 배열 순서 = 선택 순서, 씬 배열 순과 무관 */
+  const [selectedIds, setSelectedIds] = useState<string[]>([])
+  /** 드래그 영역 선택(마키) 진행 상태 — null이면 비활성. 좌표는 문서(절대 px) */
+  const [marquee, setMarquee] = useState<{
+    start: DocPoint
+    current: DocPoint
+    /** Ctrl 드래그 시작 시점의 기존 선택 — 마키 히트를 합산한다 */
+    baseIds: string[]
+    additive: boolean
+  } | null>(null)
   const [gridOpen, setGridOpen] = useState(false)
   const [gridSettingsOpen, setGridSettingsOpen] = useState(false)
   const [bgSitesOpen, setBgSitesOpen] = useState(false)
@@ -146,8 +158,12 @@ export function ProxyCanvas({ widthPx, heightPx }: ProxyCanvasProps): React.JSX.
   /** 배경 제거 진행 중 — 사이드카 추론(첫 요청은 모델 다운로드 포함) 동안 버튼 잠금 */
   const [removeBusy, setRemoveBusy] = useState(false)
 
-  /** 현재 선택 항목 — 그리드 복제·화면 채우기 기준 (렌더 스코프에서 해석: 순수 updater 유지) */
-  const selectedItem = selectedId ? (images.find((img) => img.id === selectedId) ?? null) : null
+  /**
+   * 단일 선택 항목 — 정확히 1개 선택 시에만 존재(수치 편집·그리드 복제·화면 채우기 기준).
+   * 다중 선택에서는 null — 편집은 정렬 패널로 대체된다.
+   */
+  const selectedItem =
+    selectedIds.length === 1 ? (images.find((img) => img.id === selectedIds[0]) ?? null) : null
 
   const { past, future } = history
 
@@ -175,20 +191,24 @@ export function ProxyCanvas({ widthPx, heightPx }: ProxyCanvasProps): React.JSX.
       future: [images, ...h.future].slice(0, UNDO_LIMIT)
     }))
     setImages(prev)
-    if (selectedId && !prev.some((img) => img.id === selectedId)) setSelectedId(null)
-  }, [past, images, selectedId])
+    setSelectedIds((sel) =>
+      sel.length > 0 ? sel.filter((id) => prev.some((img) => img.id === id)) : sel
+    )
+  }, [past, images])
 
   /** 다시실행 — future 선두 스냅샷 재적용, 현재 상태는 past로 이동 (선택 가드는 undo와 동일) */
   const redo = useCallback((): void => {
     if (future.length === 0) return
     const next = future[0]
     setHistory((h) => ({
-      past: [...h.past, images].slice(-UNDO_LIMIT),
+      past: [...h.past, images].slice(0, UNDO_LIMIT),
       future: h.future.slice(1)
     }))
     setImages(next)
-    if (selectedId && !next.some((img) => img.id === selectedId)) setSelectedId(null)
-  }, [future, images, selectedId])
+    setSelectedIds((sel) =>
+      sel.length > 0 ? sel.filter((id) => next.some((img) => img.id === id)) : sel
+    )
+  }, [future, images])
 
   const canUndo = past.length > 0
   const canRedo = future.length > 0
@@ -258,18 +278,20 @@ export function ProxyCanvas({ widthPx, heightPx }: ProxyCanvasProps): React.JSX.
         else undo()
         return
       }
-      if (!selectedId) return
+      if (selectedIds.length === 0) return
       if (e.key === 'Delete' || e.key === 'Backspace') {
         e.preventDefault()
-        commitImages((prev) => prev.filter((img) => img.id !== selectedId))
-        setSelectedId(null)
+        commitImages((prev) => prev.filter((img) => !selectedIds.includes(img.id)))
+        setSelectedIds([])
         return
       }
       if ((e.key === 'r' || e.key === 'R') && !e.repeat) {
         e.preventDefault()
         commitImages((prev) =>
           prev.map((img) =>
-            img.id === selectedId ? { ...img, rotation: normalizeRotation(img.rotation + 90) } : img
+            selectedIds.includes(img.id)
+              ? { ...img, rotation: normalizeRotation(img.rotation + 90) }
+              : img
           )
         )
         return
@@ -277,23 +299,24 @@ export function ProxyCanvas({ widthPx, heightPx }: ProxyCanvasProps): React.JSX.
       if (mod && (e.key === 'd' || e.key === 'D')) {
         e.preventDefault() // 브라우저 기본 동작(북마크) 차단 — Electron에서도 명시 차단
         if (e.repeat) return
-        const item = images.find((img) => img.id === selectedId)
-        if (!item) return
+        const selected = images.filter((img) => selectedIds.includes(img.id))
+        if (selected.length === 0) return
         const offset = duplicateOffset(view.scale)
-        const copy: PlacedImage = {
-          ...item,
+        // 블록 복제 — 다중 선택 전체를 동일 오프셋으로 복사하고 사본들을 새로 선택한다
+        const copies = selected.map((source) => ({
+          ...source,
           id: crypto.randomUUID(),
-          x: item.x + offset,
-          y: item.y + offset
-        }
-        commitImages((prev) => [...prev, copy])
-        setSelectedId(copy.id)
+          x: source.x + offset,
+          y: source.y + offset
+        }))
+        commitImages((prev) => [...prev, ...copies])
+        setSelectedIds(copies.map((copy) => copy.id))
       }
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [
-    selectedId,
+    selectedIds,
     images,
     view.scale,
     gridOpen,
@@ -306,15 +329,21 @@ export function ProxyCanvas({ widthPx, heightPx }: ProxyCanvasProps): React.JSX.
     redo
   ])
 
-  /** 단일 공유 트랜스포머에 선택 노드만 바인딩 — 노드 드래그는 트랜스포머가 자동 추적 */
+  /**
+   * 단일 공유 트랜스포머에 선택 노드들 바인딩 — 1개면 리사이즈·회전 핸들, 2개 이상이면
+   * 합집합 보더만(resizeEnabled/rotateEnabled=false) 렌더한다. 다중 이동은 노드
+   * 드래그 동기화(handleNodeDragMove)가 담당한다.
+   */
   useEffect(() => {
     const transformer = transformerRef.current
     const stage = stageRef.current
     if (!transformer || !stage) return
-    const node = selectedId ? stage.findOne(`#${selectedId}`) : null
-    transformer.nodes(node ? [node] : [])
+    const nodes = selectedIds
+      .map((id) => stage.findOne(`#${id}`))
+      .filter((node): node is Konva.Node => node !== undefined)
+    transformer.nodes(nodes)
     transformer.getLayer()?.batchDraw()
-  }, [selectedId, images])
+  }, [selectedIds, images])
 
   /** 휠 줌 — 포인터 아래 문서 좌표를 고정한 채 stage.scale/position만 갱신 */
   const handleWheel = (e: Konva.KonvaEventObject<WheelEvent>): void => {
@@ -347,25 +376,132 @@ export function ProxyCanvas({ widthPx, heightPx }: ProxyCanvasProps): React.JSX.
     setView((prev) => ({ ...prev, x: e.currentTarget.x(), y: e.currentTarget.y() }))
   }
 
-  /** Stage 빈 곳(스테이지 자신·문서 배경) 클릭 = 선택 해제 */
+  /**
+   * Stage 빈 곳(스테이지 자신·문서 배경) mousedown — 마키(드래그 영역 선택) 시작.
+   * Ctrl 없이 시작하면 즉시 전체 선택 해제(TC-6), Ctrl 드래그는 기존 선택에 합산.
+   * Space 팬 모드 중에는 내비게이션이 우선한다.
+   */
   const handleStageMouseDown = (e: Konva.KonvaEventObject<MouseEvent>): void => {
-    if (e.target === e.target.getStage() || e.target.name() === DOC_BACKGROUND) {
-      setSelectedId(null)
-    }
+    if (spaceDown) return
+    const onEmpty = e.target === e.target.getStage() || e.target.name() === DOC_BACKGROUND
+    if (!onEmpty) return
+    const stage = stageRef.current
+    const pointer = stage?.getPointerPosition()
+    if (!pointer) return
+    const additive = e.evt.ctrlKey || e.evt.metaKey
+    const baseIds = additive ? selectedIds : []
+    if (!additive) setSelectedIds([])
+    const doc = screenToDoc(view, pointer.x, pointer.y)
+    setMarquee({ start: doc, current: doc, baseIds, additive })
   }
 
-  /** 이미지 클릭 선택 — Space 팬 모드 중에는 무시 (내비게이션 우선) */
+  /** 마키 진행 — 드래그 사각형과 1px이라도 교차하는 항목을 실시간 선택(TC-1) */
+  const handleStageMouseMove = (e: Konva.KonvaEventObject<MouseEvent>): void => {
+    if (!marquee) return
+    const stage = e.target.getStage()
+    const pointer = stage?.getPointerPosition()
+    if (!pointer) return
+    const doc = screenToDoc(view, pointer.x, pointer.y)
+    setMarquee((prev) => (prev ? { ...prev, current: doc } : prev))
+    const hits = marqueeSelection(images, marquee.start, doc)
+    setSelectedIds(marquee.additive ? Array.from(new Set([...marquee.baseIds, ...hits])) : hits)
+  }
+
+  /**
+   * 마키 종료 — 마우스 릴리즈는 스테이지 밖에서도 놓치지 않도록 window에서 포착.
+   * 이동이 임계 미만이면 클릭으로 판정해 부가(Ctrl) 모드의 시작 시점 선택을 복원한다
+   * (일반 모드는 mousedown에서 이미 해제 완료).
+   */
+  useEffect(() => {
+    if (!marquee) return
+    const onMouseUp = (): void => {
+      const moved =
+        Math.hypot(marquee.current.x - marquee.start.x, marquee.current.y - marquee.start.y) *
+          view.scale >=
+        MARQUEE_CLICK_PX
+      if (!moved && marquee.additive) setSelectedIds(marquee.baseIds)
+      setMarquee(null)
+    }
+    window.addEventListener('mouseup', onMouseUp)
+    return () => window.removeEventListener('mouseup', onMouseUp)
+  }, [marquee, view.scale])
+
+  /**
+   * 이미지 클릭 선택 (TECH §4.2) — Ctrl/Cmd=토글(기존 선택 유지·개별 해제 TC-2/3),
+   * 일반 클릭=단일 선택. 다중 선택 구성원 재클릭은 선택을 유지한다(그룹 이동 대비).
+   * Space 팬 모드 중에는 무시 (내비게이션 우선).
+   */
   const handleSelect = useCallback(
-    (id: string): void => {
-      if (!spaceDown) setSelectedId(id)
+    (id: string, additive: boolean): void => {
+      if (spaceDown) return
+      setSelectedIds((prev) => {
+        if (additive) {
+          return prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
+        }
+        return prev.includes(id) ? prev : [id]
+      })
     },
     [spaceDown]
   )
 
-  /** 이미지 드래그 이동 확정 — 문서 좌표(절대 px)를 히스토리 커밋 */
-  const handleMove = useCallback(
+  /** 그룹 드래그 기준 스냅샷 — 다중 선택 구성원 드래그 시작 시각의 절대 px 위치들 */
+  const groupDragRef = useRef<Map<string, { x: number; y: number }> | null>(null)
+
+  /** 노드 드래그 시작 — 다중 선택이면 그룹 이동 기준점 확보 */
+  const handleNodeDragStart = useCallback(
+    (id: string): void => {
+      groupDragRef.current =
+        selectedIds.length > 1 && selectedIds.includes(id)
+          ? new Map(
+              images
+                .filter((img) => selectedIds.includes(img.id))
+                .map((img) => [img.id, { x: img.x, y: img.y }])
+            )
+          : null
+    },
+    [selectedIds, images]
+  )
+
+  /** 노드 드래그 진행 — 움직인 노드의 델타를 다른 선택 노드에 즉시 반영(단일 커밋 대비) */
+  const handleNodeDragMove = useCallback((id: string, node: Konva.Node): void => {
+    const base = groupDragRef.current
+    const start = base?.get(id)
+    if (!base || !start) return
+    const dx = node.x() - start.x
+    const dy = node.y() - start.y
+    for (const [otherId, pos] of base) {
+      if (otherId === id) continue
+      stageRef.current?.findOne(`#${otherId}`)?.position({ x: pos.x + dx, y: pos.y + dy })
+    }
+  }, [])
+
+  /**
+   * 노드 드래그 종료 — 그룹이면 전체 새 위치를 한 번에 히스토리 커밋(undo 1단계),
+   * 단일이면 해당 항목만 커밋한다.
+   */
+  const handleNodeDragEnd = useCallback(
     (id: string, x: number, y: number): void => {
-      commitImages((prev) => prev.map((img) => (img.id === id ? { ...img, x, y } : img)))
+      const base = groupDragRef.current
+      groupDragRef.current = null
+      if (!base) {
+        commitImages((prev) => prev.map((img) => (img.id === id ? { ...img, x, y } : img)))
+        return
+      }
+      const start = base.get(id)
+      if (!start) return
+      const moves = new Map(base)
+      const dx = x - start.x
+      const dy = y - start.y
+      for (const [otherId, pos] of base) {
+        if (otherId !== id) moves.set(otherId, { x: pos.x + dx, y: pos.y + dy })
+      }
+      moves.set(id, { x, y })
+      commitImages((prev) =>
+        prev.map((img) => {
+          const moved = moves.get(img.id)
+          return moved ? { ...img, ...moved } : img
+        })
+      )
     },
     [commitImages]
   )
@@ -442,34 +578,58 @@ export function ProxyCanvas({ widthPx, heightPx }: ProxyCanvasProps): React.JSX.
   /** 속성 패널 — 선택 항목 수치 편집 커밋 (cm→px 변환은 패널 담당, 여기선 절대 px만) */
   const handleUpdateSelected = useCallback(
     (patch: Partial<PlacedImage>): void => {
-      if (!selectedId) return
+      if (!selectedItem) return
       commitImages((prev) =>
-        prev.map((img) => (img.id === selectedId ? { ...img, ...patch } : img))
+        prev.map((img) => (img.id === selectedItem.id ? { ...img, ...patch } : img))
       )
     },
-    [selectedId, commitImages]
+    [selectedItem, commitImages]
   )
 
   /** 속성 패널 90° 회전 버튼 — R 단축키와 동일 규칙 */
   const handleRotate90 = useCallback((): void => {
-    if (!selectedId) return
+    if (!selectedItem) return
     commitImages((prev) =>
       prev.map((img) =>
-        img.id === selectedId ? { ...img, rotation: normalizeRotation(img.rotation + 90) } : img
+        img.id === selectedItem.id
+          ? { ...img, rotation: normalizeRotation(img.rotation + 90) }
+          : img
       )
     )
-  }, [selectedId, commitImages])
+  }, [selectedItem, commitImages])
 
   /** 속성 패널 레이어 순서 — 배열 순서 = z순서 (뒤 index가 화면 위).
    *  경계 no-op(이미 맨 앞/맨 뒤)는 커밋하지 않아 빈 undo 단계를 만들지 않는다. */
   const handleOrder = useCallback(
     (op: LayerOrderOp): void => {
-      if (!selectedId) return
-      const next = reorderItem(images, selectedId, op)
+      if (!selectedItem) return
+      const next = reorderItem(images, selectedItem.id, op)
       if (next.every((img, i) => img === images[i])) return
       commitImages(() => next)
     },
-    [images, selectedId, commitImages]
+    [images, selectedItem, commitImages]
+  )
+
+  /**
+   * 다중 선택 정렬·균등 분배 (TECH §4.3) — 순수 함수 결과를 한 번의 히스토리 커밋으로
+   * 적용해 undo 1단계를 보장한다. 조건 미달(정렬 2·분배 3 미만)은 no-op.
+   */
+  const handleAlign = useCallback(
+    (op: AlignOp): void => {
+      const moves = alignItems(
+        images.filter((img) => selectedIds.includes(img.id)),
+        op
+      )
+      if (!moves) return
+      const movesById = new Map(moves.map((move) => [move.id, move]))
+      commitImages((prev) =>
+        prev.map((img) => {
+          const move = movesById.get(img.id)
+          return move ? { ...img, x: move.x, y: move.y } : img
+        })
+      )
+    },
+    [images, selectedIds, commitImages]
   )
 
   /** 배경 제거(v2) — 처리된 RGBA PNG로 에셋 치환. 시작 시점의 id를 캡처해
@@ -529,6 +689,22 @@ export function ProxyCanvas({ widthPx, heightPx }: ProxyCanvasProps): React.JSX.
     [view.scale, commitImages]
   )
 
+  /**
+   * E2E 자동검증 훅 (DTF_SMOKE_TEST 패턴 계승) — dtf:import-paths 커스텀 이벤트로
+   * 파일 대화상자(자동화 불가) 없이 씬에 이미지를 주입한다. 렌더러 내부 경로라
+   * 일반 사용 중에는 발생하지 않는다.
+   */
+  useEffect(() => {
+    const onImportPaths = (e: Event): void => {
+      const paths = (e as CustomEvent<string[]>).detail
+      if (Array.isArray(paths) && paths.length > 0) {
+        void importPaths(paths, viewCenterDoc(view, size.w, size.h))
+      }
+    }
+    window.addEventListener('dtf:import-paths', onImportPaths)
+    return () => window.removeEventListener('dtf:import-paths', onImportPaths)
+  }, [importPaths, view, size])
+
   /** 파일 대화상자 임포트 — 현재 뷰 중심에 배치 */
   const handleImport = useCallback((): void => {
     void window.api.openImages().then((paths) => {
@@ -557,7 +733,10 @@ export function ProxyCanvas({ widthPx, heightPx }: ProxyCanvasProps): React.JSX.
   )
 
   const zoomPercent = Math.round(view.scale * 100)
-  const selectedIndex = selectedId ? images.findIndex((img) => img.id === selectedId) : -1
+  const selectedIndex =
+    selectedIds.length === 1 ? images.findIndex((img) => img.id === selectedIds[0]) : -1
+  const isSingleSelection = selectedIds.length === 1
+  const selectionStrokeWidth = 2 / view.scale
   const gridV = useMemo(
     () => gridLinePositions(widthPx, gridSettings.intervalCm),
     [widthPx, gridSettings.intervalCm]
@@ -591,6 +770,7 @@ export function ProxyCanvas({ widthPx, heightPx }: ProxyCanvasProps): React.JSX.
           onDragMove={handleDragMove}
           onDragEnd={handleDragEnd}
           onMouseDown={handleStageMouseDown}
+          onMouseMove={handleStageMouseMove}
         >
           <Layer>
             {/* 가상 문서 — 실규격 350 DPI 좌표계의 흰색 Rect (테두리는 화면 2px 유지) */}
@@ -637,17 +817,22 @@ export function ProxyCanvas({ widthPx, heightPx }: ProxyCanvasProps): React.JSX.
                 key={placed.id}
                 placed={placed}
                 draggable={!spaceDown}
+                selected={selectedIds.includes(placed.id)}
+                selectionStrokeWidth={selectionStrokeWidth}
                 onSelect={handleSelect}
-                onMove={handleMove}
+                onDragStart={handleNodeDragStart}
+                onDragMove={handleNodeDragMove}
+                onDragEnd={handleNodeDragEnd}
                 onTransform={handleTransform}
               />
             ))}
-            {/* 씬 전체 유일 트랜스포머 — 모서리 4핸들(비율 유지 기본, Shift=자유 비율) + 회전 앵커.
+            {/* 씬 전체 유일 트랜스포머 — 1개 선택: 모서리 4핸들(비율 유지 기본, Shift=자유
+              비율) + 회전 앵커 · 2개 이상: 합집합 보더만(이동은 노드 드래그 동기화).
               트랜스포머는 절대(화면) 좌표계로 렌더 — 앵커·스트로크는 줌 배율과 무관하게 화면 px */}
             <Transformer
               ref={transformerRef}
-              resizeEnabled
-              rotateEnabled
+              resizeEnabled={isSingleSelection}
+              rotateEnabled={isSingleSelection}
               keepRatio
               shiftBehavior="inverted"
               enabledAnchors={['top-left', 'top-right', 'bottom-left', 'bottom-right']}
@@ -657,6 +842,22 @@ export function ProxyCanvas({ widthPx, heightPx }: ProxyCanvasProps): React.JSX.
               anchorStroke={SELECTION_STROKE}
             />
           </Layer>
+          {marquee && (
+            <Layer listening={false}>
+              {/* 마키 선택 박스 — 반투명 채움 + 대시 보더 (TECH §2.1 실시간 피드백) */}
+              <Rect
+                x={Math.min(marquee.start.x, marquee.current.x)}
+                y={Math.min(marquee.start.y, marquee.current.y)}
+                width={Math.abs(marquee.current.x - marquee.start.x)}
+                height={Math.abs(marquee.current.y - marquee.start.y)}
+                fill="rgba(99,102,241,0.08)"
+                stroke={SELECTION_STROKE}
+                strokeWidth={1 / view.scale}
+                dash={[4 / view.scale, 4 / view.scale]}
+                perfectDrawEnabled={false}
+              />
+            </Layer>
+          )}
         </Stage>
 
         {/* 문서 바깥 자 — 상단(가로 cm)·좌측(세로 cm), 문서 범위 하이라이트 포함 */}
@@ -790,9 +991,9 @@ export function ProxyCanvas({ widthPx, heightPx }: ProxyCanvasProps): React.JSX.
 
         {/* 조작 힌트 */}
         <div className="absolute bottom-3 left-3 select-none rounded-md border border-zinc-800 bg-zinc-900/95 px-3 py-1.5 text-[11px] text-zinc-500 backdrop-blur">
-          휠: 줌 · Space + 드래그: 팬 · 클릭: 선택 · 드래그: 이동 · 핸들: 크기(Shift: 자유
-          비율)·회전 · Ctrl+D: 복제 · R: 90° 회전 · Del: 삭제 · Ctrl+Z/Y: 실행취소·다시실행 · 이미지
-          드롭: 배치
+          휠: 줌 · Space + 드래그: 팬 · 클릭: 선택 · 드래그: 이동 · 빈 곳 드래그: 영역 선택 ·
+          Ctrl+클릭: 선택 추가/해제 · 핸들: 크기(Shift: 자유 비율)·회전 · Ctrl+D: 복제 · R: 90° 회전
+          · Del: 삭제 · Ctrl+Z/Y: 실행취소·다시실행 · 이미지 드롭: 배치
         </div>
       </div>
 
@@ -800,6 +1001,8 @@ export function ProxyCanvas({ widthPx, heightPx }: ProxyCanvasProps): React.JSX.
         item={selectedItem}
         itemCount={images.length}
         selectedIndex={selectedIndex >= 0 ? selectedIndex : null}
+        multiSelectedCount={selectedIds.length}
+        onAlign={handleAlign}
         onUpdate={handleUpdateSelected}
         onRotate90={handleRotate90}
         onOrder={handleOrder}
@@ -816,8 +1019,14 @@ interface SceneImageProps {
   placed: PlacedImage
   /** Space 팬 모드 중 false — stage 드래그가 우선한다 */
   draggable: boolean
-  onSelect: (id: string) => void
-  onMove: (id: string, x: number, y: number) => void
+  /** 다중 선택 구성원 여부 — 선택 테두리(스트로크) 렌더 */
+  selected: boolean
+  /** 선택 스트로크 두께(절대 px) — 줌 배율 역보정값(화면 2px 고정)을 호출자가 계산해 전달 */
+  selectionStrokeWidth: number
+  onSelect: (id: string, additive: boolean) => void
+  onDragStart: (id: string) => void
+  onDragMove: (id: string, node: Konva.Node) => void
+  onDragEnd: (id: string, x: number, y: number) => void
   onTransform: (id: string, reading: NodeTransformReading) => void
 }
 
@@ -860,12 +1069,16 @@ function OverlayButton({
   )
 }
 
-/** 씬 이미지 노드 — 원본 px 크기 그대로 렌더. mousedown으로 즉선택 후 드래그 이동 */
+/** 씬 이미지 노드 — 원본 px 크기 그대로 렌더. mousedown으로 즉선택(Ctrl=토글) 후 드래그 이동 */
 function SceneImage({
   placed,
   draggable,
+  selected,
+  selectionStrokeWidth,
   onSelect,
-  onMove,
+  onDragStart,
+  onDragMove,
+  onDragEnd,
   onTransform
 }: SceneImageProps): React.JSX.Element | null {
   const el = useHtmlImage(placed.dataUrl)
@@ -880,8 +1093,13 @@ function SceneImage({
       height={placed.heightPx}
       image={el}
       draggable={draggable}
-      onMouseDown={() => onSelect(placed.id)}
-      onDragEnd={(e) => onMove(placed.id, e.currentTarget.x(), e.currentTarget.y())}
+      stroke={selected ? SELECTION_STROKE : undefined}
+      strokeWidth={selected ? selectionStrokeWidth : undefined}
+      strokeHitEnabled={false}
+      onMouseDown={(e) => onSelect(placed.id, e.evt.ctrlKey || e.evt.metaKey)}
+      onDragStart={() => onDragStart(placed.id)}
+      onDragMove={(e) => onDragMove(placed.id, e.currentTarget)}
+      onDragEnd={(e) => onDragEnd(placed.id, e.currentTarget.x(), e.currentTarget.y())}
       onTransformEnd={(e) => {
         // 트랜스포머는 리사이즈를 임시 scaleX/scaleY로 적용한다. 판독 직후 노드에 1로 리셋 —
         // react-konva는 prop으로 전달하지 않은 scale을 다음 렌더에서 되돌리지 않는다 (Konva 공식 패턴)
