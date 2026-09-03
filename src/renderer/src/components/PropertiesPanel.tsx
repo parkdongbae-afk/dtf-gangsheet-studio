@@ -267,6 +267,39 @@ export function PropertiesPanel({
               Ctrl+Z로 되돌릴 수 있습니다.
             </p>
           </Section>
+          <Section
+            title="배경 제거"
+            icon={<Eraser size={ICON.size} strokeWidth={ICON.strokeWidth} />}
+          >
+            <button
+              type="button"
+              onClick={onRemoveBg}
+              disabled={removeBusy}
+              title={`배경 제거 (${multiSelectedCount}개)`}
+              aria-label={`배경 제거 (${multiSelectedCount}개)`}
+              className="flex w-full items-center justify-center gap-2 rounded-md border border-indigo-500 bg-indigo-500/15 py-2 text-xs font-medium text-indigo-300 transition-colors hover:bg-indigo-500/25 active:scale-95 disabled:pointer-events-none disabled:opacity-40"
+            >
+              {removeBusy ? (
+                <Loader2 size={ICON.size} strokeWidth={ICON.strokeWidth} className="animate-spin" />
+              ) : (
+                <Eraser size={ICON.size} strokeWidth={ICON.strokeWidth} />
+              )}
+              {removeBusy ? '처리 중…' : `배경 제거 (${multiSelectedCount}개)`}
+            </button>
+            <p className="mt-2 text-[10px] leading-relaxed text-zinc-500">
+              선택 {multiSelectedCount}개를 한 번에 순차 처리해 배경을 투명하게 만듭니다. 전체가 한
+              단계로 Ctrl+Z 복구되며, 처리된 항목도 내보내기는 기존과 동일하게 동작합니다.
+            </p>
+            <button
+              type="button"
+              onClick={onOpenBgSites}
+              title="고해상도 다운로드가 가능한 무료 AI 누끼 서비스 모음 열기"
+              className="mt-1.5 flex w-full items-center justify-center gap-2 rounded-md border border-zinc-800 bg-zinc-900 py-1.5 text-xs text-zinc-300 transition-colors hover:bg-zinc-800 active:scale-[0.98]"
+            >
+              <Globe size={13} strokeWidth={1.5} className="text-zinc-400" />
+              배경 제거 사이트…
+            </button>
+          </Section>
           <div className="flex flex-col items-center gap-2 px-6 py-8 text-center">
             <MousePointerClick size={20} strokeWidth={1.5} className="text-zinc-600" />
             <span className="text-xs text-zinc-500">

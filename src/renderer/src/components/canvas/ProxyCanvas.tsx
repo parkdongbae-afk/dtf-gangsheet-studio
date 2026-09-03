@@ -632,29 +632,44 @@ export function ProxyCanvas({ widthPx, heightPx }: ProxyCanvasProps): React.JSX.
     [images, selectedIds, commitImages]
   )
 
-  /** 배경 제거(v2) — 처리된 RGBA PNG로 에셋 치환. 시작 시점의 id를 캡처해
-   *  처리 중 선택이 바뀌어도 올바른 항목을 갱신하고, undo 스냅샷으로 되돌린다. */
+  /**
+   * 배경 제거(v2) — 선택 항목 전체(단일·다중)를 순차 처리해 RGBA PNG로 에셋 치환.
+   * 시작 시점의 id·경로를 캡처해 처리 중 선택이 바뀌어도 올바른 항목을 갱신하고,
+   * 성공분은 한 번의 히스토리 커밋으로 반영해 배치 전체가 undo 1단계로 되돌려진다.
+   * 치환 정책상 내보내기 파이프라인은 무수정 재사용된다(알파→백색 잉크 마스크).
+   */
   const handleRemoveBg = useCallback((): void => {
-    if (!selectedItem || removeBusy) return
-    const targetId = selectedItem.id
-    const sourcePath = selectedItem.filePath
+    const targets = images
+      .filter((img) => selectedIds.includes(img.id))
+      .map((img) => ({ id: img.id, filePath: img.filePath }))
+    if (targets.length === 0 || removeBusy) return
     setRemoveBusy(true)
-    window.api
-      .removeBackground(sourcePath)
-      .then((result) => {
+    void (async (): Promise<void> => {
+      const done: Array<{ id: string; filePath: string; dataUrl: string }> = []
+      const failures: string[] = []
+      for (const target of targets) {
+        try {
+          const result = await window.api.removeBackground(target.filePath)
+          done.push({ id: target.id, filePath: result.filePath, dataUrl: result.dataUrl })
+        } catch (err) {
+          failures.push(err instanceof Error ? err.message : String(err))
+        }
+      }
+      if (done.length > 0) {
+        const doneById = new Map(done.map((entry) => [entry.id, entry]))
         commitImages((prev) =>
-          prev.map((img) =>
-            img.id === targetId
-              ? { ...img, filePath: result.filePath, dataUrl: result.dataUrl }
-              : img
-          )
+          prev.map((img) => {
+            const entry = doneById.get(img.id)
+            return entry ? { ...img, filePath: entry.filePath, dataUrl: entry.dataUrl } : img
+          })
         )
-      })
-      .catch((err: unknown) => {
-        alert(`배경 제거 실패: ${err instanceof Error ? err.message : String(err)}`)
-      })
-      .finally(() => setRemoveBusy(false))
-  }, [selectedItem, removeBusy, commitImages])
+      }
+      setRemoveBusy(false)
+      if (failures.length > 0) {
+        alert(`배경 제거 실패 ${failures.length}/${targets.length}건:\n${failures.join('\n')}`)
+      }
+    })()
+  }, [images, selectedIds, removeBusy, commitImages])
 
   /** 경로들을 기준점 중심에 캐스케이드 배치해 씬에 추가 */
   const importPaths = useCallback(
