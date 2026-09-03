@@ -1,10 +1,10 @@
-/**
- * 공유 IPC 계약 (CLAUDE.md §2.1 src/types) — 메인·프리로드·렌더러가 함께 참조.
+/** 공유 IPC 계약 (CLAUDE.md §2.1 src/types) — 메인·프리로드·렌더러가 함께 참조.
  *
- * 원칙: 렌더러 ↔ 메인 사이에 이미지 바이너리(ArrayBuffer)를 전송하지 않고
- * 파일 절대 경로만 주고받는다. 프리뷰는 메인 프로세스에서 ≤2,048px로
- * 리사이즈한 PNG dataURL로 전달한다 (S4 절약 패턴 #1·#2).
+ * 원칙: 렌더러→메인 사이드카에 바이너리(ArrayBuffer)를 전송하지 않고
+ * 파일 절대 경로를 주고받는다. 프리뷰는 메인 프로세스에서 ≤2,048px로
+ * 리사이즈한 PNG dataURL로 전달한다 (S4 설계 패턴 #1·#2).
  */
+import type { ProjectData } from '../core/project'
 
 /** 이미지 임포트 결과 — 원본 크기는 350 DPI 절대 px 기준 */
 export interface ImportedImage {
@@ -73,4 +73,8 @@ export interface DtfApi {
   openGuidePdf(): Promise<void>
   /** 번들된 사용자 메뉴얼 PDF를 시스템 기본 뷰어로 열기 */
   openManualPdf(): Promise<void>
+  /** 현재 작업을 .dtf 프로젝트로 저장 — 저장 경로 반환, 취소 시 null */
+  saveProject(data: ProjectData, path?: string): Promise<string | null>
+  /** .dtf 프로젝트 열기 — 프로젝트 데이터 반환, 취소 시 null */
+  openProject(path?: string): Promise<ProjectData | null>
 }

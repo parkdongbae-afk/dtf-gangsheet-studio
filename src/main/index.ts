@@ -6,6 +6,7 @@ import { registerImageImportIpc } from './ipc/imageImport'
 import { registerExportIpc, runExportTestHook } from './ipc/export'
 import { registerRemoveBgIpc } from './ipc/removeBg'
 import { registerGuidePdfIpc } from './ipc/openGuidePdf'
+import { registerProjectIpc } from './ipc/projectFile'
 
 function createWindow(): void {
   // Create the browser window.
@@ -66,6 +67,7 @@ app.whenReady().then(() => {
   registerExportIpc()
   registerRemoveBgIpc()
   registerGuidePdfIpc()
+  registerProjectIpc()
 
   createWindow()
 
