@@ -44,6 +44,17 @@ function App(): React.JSX.Element {
     }
   }, [])
 
+  /** 툴바 "새 파일" — 진행 중 세션 폐기 후 새 문서 설정 화면으로 돌아간다 (미저장 경고) */
+  const handleNewProject = useCallback((): void => {
+    if (
+      !window.confirm(
+        '현재 작업 내용을 버리고 새 문서를 만들까요?\n저장하지 않은 변경 사항은 사라집니다.'
+      )
+    )
+      return
+    setDoc(null)
+  }, [])
+
   /** E2E 자동검증 훅 (dtf:import-paths 패턴 계승) — 파일 다이얼로그 없이 경로로 프로젝트를 연다 */
   useEffect(() => {
     const onOpenProject = (e: Event): void => {
@@ -62,6 +73,7 @@ function App(): React.JSX.Element {
         initialImages={doc.images}
         loadNonce={doc.nonce}
         onOpenProject={() => void openProjectFromDisk()}
+        onNewProject={handleNewProject}
       />
     )
   }

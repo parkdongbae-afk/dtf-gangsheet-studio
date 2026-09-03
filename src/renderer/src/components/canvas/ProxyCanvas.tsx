@@ -6,6 +6,7 @@ import {
   Boxes,
   Expand,
   FileOutput,
+  FilePlus2,
   FolderOpen,
   Grid2x2,
   Grid3x3,
@@ -191,6 +192,8 @@ export interface ProxyCanvasProps {
   loadNonce: number
   /** 툴바 "열기" — App이 .dtf 다이얼로그를 주관한다(문서 규격 교체 필요) */
   onOpenProject: () => void
+  /** 툴바 "새 파일" — App이 세션을 폐기하고 새 문서 설정 화면으로 돌아간다 */
+  onNewProject: () => void
 }
 
 export function ProxyCanvas({
@@ -198,7 +201,8 @@ export function ProxyCanvas({
   heightPx,
   initialImages,
   loadNonce,
-  onOpenProject
+  onOpenProject,
+  onNewProject
 }: ProxyCanvasProps): React.JSX.Element {
   const stageRef = useRef<Konva.Stage>(null)
   /** 씬 전체에서 유일한 트랜스포머 — 선택 테두리 렌더 (이미지별 트랜스포머 금지) */
@@ -1647,6 +1651,9 @@ export function ProxyCanvas({
             <span className="font-semibold text-zinc-200">{zoomPercent}%</span>
           </div>
           <div className="flex items-center gap-1 rounded-lg border border-zinc-800 bg-zinc-900/95 p-1 shadow-2xl backdrop-blur">
+            <OverlayButton onClick={onNewProject} title="새 파일 — 새 문서 규격으로 시작">
+              <FilePlus2 size={14} strokeWidth={1.5} />새 파일
+            </OverlayButton>
             <OverlayButton onClick={onOpenProject} title="프로젝트 열기 (.dtf)">
               <FolderOpen size={14} strokeWidth={1.5} />
               열기
