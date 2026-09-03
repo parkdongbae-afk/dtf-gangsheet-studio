@@ -31,6 +31,8 @@ interface ContextMenuProps {
   selectionCount: number
   canGroup: boolean
   canUngroup: boolean
+  /** 정렬·분배 유닛 수 — 같은 그룹은 1유닛 (분배 가능 판정 기준) */
+  alignUnitCount: number
   /** 선택에 잠금 해제 항목 포함 — true면 "잠금", 전부 잠겼으면 "잠금 해제" 표시 */
   anyUnlocked: boolean
   /** 바깥 클릭 판정용 루트 요소 ref — 부모(ProxyCanvas) window mousedown 캡처와 연동 */
@@ -118,6 +120,7 @@ export function ContextMenu({
   selectionCount,
   canGroup,
   canUngroup,
+  alignUnitCount,
   anyUnlocked,
   rootRef,
   onDuplicate,
@@ -144,7 +147,7 @@ export function ContextMenu({
 
   const hasSelection = selectionCount > 0
   const canAlign = selectionCount >= 2
-  const canDistribute = selectionCount >= 3
+  const canDistribute = alignUnitCount >= 3
 
   const setRoot = (node: HTMLDivElement): void => {
     ref.current = node
@@ -242,8 +245,8 @@ export function ContextMenu({
         <button
           type="button"
           disabled={!canDistribute}
-          title="수평 간격 균등 분배 (3개 이상)"
-          aria-label="수평 간격 균등 분배 (3개 이상)"
+          title="수평 간격 균등 분배 (그룹 포함 3유닛 이상)"
+          aria-label="수평 간격 균등 분배 (그룹 포함 3유닛 이상)"
           onClick={() => onAlign('distH')}
           className="flex h-7 items-center justify-center gap-1 rounded-md text-[10px] text-zinc-400 transition-colors hover:bg-zinc-800 active:scale-95 disabled:pointer-events-none disabled:opacity-40"
         >
@@ -253,8 +256,8 @@ export function ContextMenu({
         <button
           type="button"
           disabled={!canDistribute}
-          title="수직 간격 균등 분배 (3개 이상)"
-          aria-label="수직 간격 균등 분배 (3개 이상)"
+          title="수직 간격 균등 분배 (그룹 포함 3유닛 이상)"
+          aria-label="수직 간격 균등 분배 (그룹 포함 3유닛 이상)"
           onClick={() => onAlign('distV')}
           className="flex h-7 items-center justify-center gap-1 rounded-md text-[10px] text-zinc-400 transition-colors hover:bg-zinc-800 active:scale-95 disabled:pointer-events-none disabled:opacity-40"
         >

@@ -734,6 +734,15 @@ export function ProxyCanvas({
       .map((id) => stage.findOne(`#${id}`))
       .filter((node): node is Konva.Node => node !== undefined)
     transformer.nodes(nodes)
+    // Konva Transformer의 _proxyDrag 프록시(노드별 dragstart/dragmove 리스너 — 네임스페이스
+    // tr-konva{_id})는 한 노드의 드래그를 나머지 선택 노드에 강제 전파(startDrag)해 진행 중
+    // 드래그 세션을 오염시킨다(Ctrl+드래그 복제가 move로 뒤집히는 2026-09-03 실기 재현 결함).
+    // 다중 선택 이동 동기화는 handleNodeDragMove가 전담하므로 프록시는 제거한다.
+    const proxyNamespace = `tr-konva${transformer._id}`
+    for (const node of transformer.getNodes()) {
+      node.off(`dragstart.${proxyNamespace}`)
+      node.off(`dragmove.${proxyNamespace}`)
+    }
     transformer.getLayer()?.batchDraw()
   }, [selectedIds, images])
 
@@ -976,6 +985,9 @@ export function ProxyCanvas({
    */
   const handleNodeDragStart = useCallback(
     (id: string): void => {
+      // 한 마우스 제스처 = 첫 dragstart에서 확정된 단일 세션. 같은 제스처 중 다른 노드의
+      // dragstart(외부 프록시가 강제 발화)는 기존 세션을 덮어쓰지 못하게 한다.
+      if (dragRef.current !== null) return
       pendingToggleOffRef.current = null
       const gesture = gestureRef.current
       const locked = (sid: string): boolean => images.find((img) => img.id === sid)?.locked === true
@@ -1236,15 +1248,37 @@ export function ProxyCanvas({
   )
 
   /**
+   * 정렬·분배 대상 — 선택에서 잠긴 항목과, 잠긴 멤버가 속한 그룹 전체를 제외한다
+   * (그룹 일부만 움직여 그룹이 찢어지는 것 방지). groupId 없는 항목은 스스로 유닛.
+   */
+  const alignTargets = useMemo(() => {
+    const lockedGroupIds = new Set(
+      images
+        .filter((img) => img.locked === true && img.groupId !== undefined)
+        .map((img) => img.groupId)
+    )
+    return images.filter(
+      (img) =>
+        selectedIds.includes(img.id) &&
+        img.locked !== true &&
+        !(img.groupId !== undefined && lockedGroupIds.has(img.groupId))
+    )
+  }, [images, selectedIds])
+
+  /** 정렬·분배 유닛 수 — 같은 그룹은 1유닛 (그룹 원자성, 분배 가능 판정 기준) */
+  const alignUnitCount = useMemo(
+    () => new Set(alignTargets.map((img) => img.groupId ?? img.id)).size,
+    [alignTargets]
+  )
+
+  /**
    * 다중 선택 정렬·균등 분배 (TECH §4.3) — 순수 함수 결과를 한 번의 히스토리 커밋으로
-   * 적용해 undo 1단계를 보장한다. 조건 미달(정렬 2·분배 3 미만)·잠긴 항목 제외 후 없음은 no-op.
+   * 적용해 undo 1단계를 보장한다. 그룹은 원자 유닛으로 취급되어 내부 상대 위치가 불변.
+   * 조건 미달(정렬 2·분배 3유닛)은 alignItems가 null로 no-op.
    */
   const handleAlign = useCallback(
     (op: AlignOp): void => {
-      const moves = alignItems(
-        images.filter((img) => selectedIds.includes(img.id) && !img.locked),
-        op
-      )
+      const moves = alignItems(alignTargets, op)
       if (!moves) return
       const movesById = new Map(moves.map((move) => [move.id, move]))
       commitImages((prev) =>
@@ -1254,21 +1288,16 @@ export function ProxyCanvas({
         })
       )
     },
-    [images, selectedIds, commitImages]
+    [alignTargets, commitImages]
   )
 
   /**
    * 문서 기준 정렬 — 선택(1개 이상) union을 문서 가장자리·중앙에 맞춘다 (델타 기능).
-   * 상대 정렬과 동일하게 순수 함수 → 히스토리 1커밋. 잠긴 항목은 제외.
+   * 상대 정렬과 동일하게 순수 함수 → 히스토리 1커밋. 잠긴 멤버가 있는 그룹은 제외.
    */
   const handleDocAlign = useCallback(
     (op: DocAlignOp): void => {
-      const moves = alignToDocument(
-        images.filter((img) => selectedIds.includes(img.id) && !img.locked),
-        op,
-        widthPx,
-        heightPx
-      )
+      const moves = alignToDocument(alignTargets, op, widthPx, heightPx)
       if (!moves) return
       const movesById = new Map(moves.map((move) => [move.id, move]))
       commitImages((prev) =>
@@ -1278,7 +1307,7 @@ export function ProxyCanvas({
         })
       )
     },
-    [images, selectedIds, widthPx, heightPx, commitImages]
+    [alignTargets, widthPx, heightPx, commitImages]
   )
 
   /**
@@ -1755,6 +1784,7 @@ export function ProxyCanvas({
             selectionCount={selectedImages.length}
             canGroup={canGroupMenu}
             canUngroup={canUngroupMenu}
+            alignUnitCount={alignUnitCount}
             anyUnlocked={anySelectedUnlocked}
             rootRef={menuRef}
             onDuplicate={() => {
@@ -1831,6 +1861,7 @@ export function ProxyCanvas({
         itemCount={images.length}
         selectedIndex={selectedIndex >= 0 ? selectedIndex : null}
         multiSelectedCount={selectedIds.length}
+        alignUnitCount={alignUnitCount}
         onAlign={handleAlign}
         onDocAlign={handleDocAlign}
         onUpdate={handleUpdateSelected}

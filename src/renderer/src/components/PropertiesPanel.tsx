@@ -41,6 +41,8 @@ export interface PropertiesPanelProps {
   selectedIndex: number | null
   /** 다중 선택 개수 — 2 이상이면 정렬 패널이 편집 패널을 대체한다 */
   multiSelectedCount: number
+  /** 정렬·분배 유닛 수 — 같은 그룹은 1유닛 (분배는 3유닛 이상 가능) */
+  alignUnitCount: number
   onAlign: (op: AlignOp) => void
   onDocAlign: (op: DocAlignOp) => void
   onUpdate: (patch: Partial<PlacedImage>) => void
@@ -190,6 +192,7 @@ export function PropertiesPanel({
   itemCount,
   selectedIndex,
   multiSelectedCount,
+  alignUnitCount,
   onAlign,
   onDocAlign,
   onUpdate,
@@ -204,7 +207,7 @@ export function PropertiesPanel({
 }: PropertiesPanelProps): React.JSX.Element {
   const [linked, setLinked] = useState(true)
   const multi = !item && multiSelectedCount >= 2
-  const canDistribute = multiSelectedCount >= 3
+  const canDistribute = alignUnitCount >= 3
   /** 진행 중 라벨 — 배치면 n/N, 단일이면 스피너만 */
   const removeBusyLabel =
     removeProgress && removeProgress.total > 1
@@ -271,14 +274,14 @@ export function PropertiesPanel({
             </div>
             <div className="mt-1.5 grid grid-cols-2 gap-1.5">
               <IconBtn
-                label="수평 간격 균등 분배 (3개 이상)"
+                label="수평 간격 균등 분배 (그룹 포함 3유닛 이상)"
                 onClick={() => onAlign('distH')}
                 disabled={!canDistribute}
               >
                 <AlignHorizontalJustifyCenter size={ICON.size} strokeWidth={ICON.strokeWidth} />
               </IconBtn>
               <IconBtn
-                label="수직 간격 균등 분배 (3개 이상)"
+                label="수직 간격 균등 분배 (그룹 포함 3유닛 이상)"
                 onClick={() => onAlign('distV')}
                 disabled={!canDistribute}
               >
@@ -308,8 +311,10 @@ export function PropertiesPanel({
               ))}
             </div>
             <p className="mt-2 text-[10px] leading-relaxed text-zinc-500">
-              {multiSelectedCount}개 항목을 회전된 표시 영역 기준으로 정렬합니다. 문서 기준은 선택
-              전체를 문서 가장자리·중앙에 맞춥니다. 모든 정렬은 Ctrl+Z로 되돌릴 수 있습니다.
+              {multiSelectedCount}개 항목을 회전된 표시 영역 기준으로 정렬합니다. 그룹은 하나의
+              단위로 움직여 내부 배치가 유지되고, 간격 분배는 그룹 포함 3유닛 이상부터 가능합니다.
+              문서 기준은 선택 전체를 문서 가장자리·중앙에 맞춥니다. 모든 정렬은 Ctrl+Z로 되돌릴 수
+              있습니다.
             </p>
           </Section>
           <Section
