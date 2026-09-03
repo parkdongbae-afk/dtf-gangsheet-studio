@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type Konva from 'konva'
+import Konva from 'konva'
 import type { Box } from 'konva/lib/shapes/Transformer'
 import { Image, Layer, Line, Rect, Shape, Stage, Text, Transformer } from 'react-konva'
 import {
@@ -110,6 +110,11 @@ export interface PlacedImage {
 /** 줌 클램프 (화면 배율 기준) */
 const MIN_SCALE = 0.02
 const MAX_SCALE = 8
+
+// Konva 기본 dragButtons=[0,1]은 중앙 버튼(휠 클릭)도 노드 드래그로 시작시킨다 —
+// 이 앱에서 휠 클릭은 팬 전용이므로 좌클릭만 노드 드래그로 제한한다
+// (이미지 위에서 휠 클릭 팬 시 이미지가 끌리던 결함, 2026-09-04 접수).
+Konva.dragButtons = [0]
 /** 휠 delta → 줌 비율 (exp 곱산: 휠·트랙패드 공통 부드러움) */
 const ZOOM_SENSITIVITY = 0.0015
 /** fit-to-screen 시 화면 가장자리 여백 (px) */
@@ -1596,7 +1601,7 @@ export function ProxyCanvas({
               ))}
               {snapOverlay.labels.map((label, i) => {
                 const text = `${pxToMm(label.gapPx).toFixed(1)}mm`
-                const fontSize = 12 / view.scale
+                const fontSize = 36 / view.scale
                 return (
                   <Text
                     key={`snap-label-${i}`}
