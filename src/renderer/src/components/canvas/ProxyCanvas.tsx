@@ -190,6 +190,35 @@ function fitView(docW: number, docH: number, viewW: number, viewH: number): View
   return { scale, x: (viewW - docW * scale) / 2, y: (viewH - docH * scale) / 2 }
 }
 
+/** 배경 제거 치환 항목 — 트림되면 치수가 변해 배치 축 재환산이 필요하다 */
+interface RemovedBgEntry {
+  id: string
+  filePath: string
+  dataUrl: string
+  srcWidthPx: number
+  srcHeightPx: number
+  /** null이면 치수 불변(트림 no-op·OFF·실패 폴백) */
+  trimmed: { widthPx: number; heightPx: number } | null
+}
+
+/** 치환 시 배치 축(원본 px→문서 px) 비율은 유지하고 기존 항목의 중심점을 보존한다 */
+const applyRemovedBg = (img: PlacedImage, entry: RemovedBgEntry): PlacedImage => {
+  if (entry.trimmed === null) {
+    return { ...img, filePath: entry.filePath, dataUrl: entry.dataUrl }
+  }
+  const newW = (entry.trimmed.widthPx / entry.srcWidthPx) * img.widthPx
+  const newH = (entry.trimmed.heightPx / entry.srcHeightPx) * img.heightPx
+  return {
+    ...img,
+    filePath: entry.filePath,
+    dataUrl: entry.dataUrl,
+    widthPx: newW,
+    heightPx: newH,
+    x: img.x + (img.widthPx - newW) / 2,
+    y: img.y + (img.heightPx - newH) / 2
+  }
+}
+
 export interface ProxyCanvasProps {
   /** 문서 가로 (350 DPI px) — 6,890 */
   widthPx: number
@@ -1376,6 +1405,8 @@ export function ProxyCanvas({
    * 히스토리 커밋은 배치 전체를 마친 뒤 1회(undo 기준 = 시작 시점 씬)로 유지해
    * 배치 전체가 undo 1단계로 되돌려지는 기존 계약을 보존한다.
    * 치환 정책상 내보내기 파이프라인은 무수정 재사용된다(알파→백색 잉크 마스크).
+   * Auto-Trim ON이면 결과의 투명 여백을 알파 바운딩 박스로 잘라 치환한다 —
+   * 여백이 남으면 항목 크기가 캔버스 전체 기준이 되어 복제 시 이미지끼리 멀어진다.
    */
   const handleRemoveBg = useCallback((): void => {
     const targets = images
@@ -1385,18 +1416,34 @@ export function ProxyCanvas({
     setRemoveBusy(true)
     setRemoveProgress({ current: 0, total: targets.length })
     void (async (): Promise<void> => {
-      const done: Array<{ id: string; filePath: string; dataUrl: string }> = []
+      const done: RemovedBgEntry[] = []
       const failures: string[] = []
       for (const [index, target] of targets.entries()) {
         try {
           const result = await window.api.removeBackground(target.filePath)
-          const entry = {
+          let filePath = result.filePath
+          let dataUrl = result.dataUrl
+          let trimmed: RemovedBgEntry['trimmed'] = null
+          if (autoTrim) {
+            const t = await window.api.autoTrimImage(filePath).catch(() => null)
+            if (t && t.trimmed) {
+              filePath = t.filePath
+              dataUrl = t.dataUrl
+              trimmed = { widthPx: t.widthPx, heightPx: t.heightPx }
+            }
+          }
+          const entry: RemovedBgEntry = {
             id: target.id,
-            filePath: result.filePath,
-            dataUrl: result.dataUrl
+            filePath,
+            dataUrl,
+            srcWidthPx: result.widthPx,
+            srcHeightPx: result.heightPx,
+            trimmed
           }
           done.push(entry)
-          setImages((prev) => prev.map((img) => (img.id === entry.id ? { ...img, ...entry } : img)))
+          setImages((prev) =>
+            prev.map((img) => (img.id === entry.id ? applyRemovedBg(img, entry) : img))
+          )
         } catch (err) {
           failures.push(err instanceof Error ? err.message : String(err))
         }
@@ -1407,7 +1454,7 @@ export function ProxyCanvas({
         commitImages((prev) =>
           prev.map((img) => {
             const entry = doneById.get(img.id)
-            return entry ? { ...img, filePath: entry.filePath, dataUrl: entry.dataUrl } : img
+            return entry ? applyRemovedBg(img, entry) : img
           })
         )
       }
@@ -1417,7 +1464,7 @@ export function ProxyCanvas({
         alert(`배경 제거 실패 ${failures.length}/${targets.length}건:\n${failures.join('\n')}`)
       }
     })()
-  }, [images, selectedIds, removeBusy, setImages, commitImages])
+  }, [images, selectedIds, removeBusy, autoTrim, setImages, commitImages])
 
   /**
    * 업스케일 완료 치환 — 결과(DPI 메타 포함 PNG)를 새 에셋으로 교체한다(removeBg
